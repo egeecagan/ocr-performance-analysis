@@ -6,11 +6,14 @@ from pathlib import Path
 from runners.registry import ENGINES
 
 # =============================================================================
-# Mutlak yol temeli
+# Base paths
 # =============================================================================
-# main.py'nin KENDİ konumuna göre tüm yolları hesaplıyoruz. main.py'yi
-# nereden çalıştırırsanız çalıştırın, her zaman kendi yanındaki
-# inputs/configurations/outputs klasörlerini bulur.
+# All paths are resolved relative to this file's own location, so main.py
+# works correctly no matter which directory you run it from. It expects:
+#   inputs/images/                      - input images
+#   inputs/truths/                      - optional ground-truth .txt files
+#   configurations/<engine>/<name>.yaml - per-engine config files
+#   outputs/                            - created automatically if missing
 # =============================================================================
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -22,11 +25,12 @@ CONFIGS_DIR = BASE_DIR / "configurations"
 
 def load_ground_truth(img_name, truths_dir=TRUTHS_DIR):
     """
-    Görsel adıyla eşleşen ground truth .txt dosyasını okur.
-    Örnek: resim1.png -> inputs/truths/resim1.txt
+    Loads the ground-truth text file matching an image, if one exists.
+    Example: image1.png -> inputs/truths/image1.txt
 
-    Dosya varsa: (metin_içeriği, True)
-    Dosya yoksa: (None, False)
+    Returns:
+        (text, True)  if the file exists
+        (None, False) otherwise
     """
     truth_path = Path(truths_dir) / f"{Path(img_name).stem}.txt"
 
@@ -40,8 +44,8 @@ def load_ground_truth(img_name, truths_dir=TRUTHS_DIR):
 
 def process_pipeline(engine, model_name):
     if engine not in ENGINES:
-        print(f"Hata: '{engine}' motoru registry.py'de tanımlı değil.")
-        print(f"Tanımlı motorlar: {list(ENGINES.keys())}")
+        print(f"Error: '{engine}' is not registered in registry.py.")
+        print(f"Registered engines: {list(ENGINES.keys())}")
         return
 
     engine_spec = ENGINES[engine]
@@ -55,54 +59,37 @@ def process_pipeline(engine, model_name):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # =========================================================================
-    # Model/reader/processor'ı BİR KEZ yükle, tüm görseller için paylaş
+    # Load the model/reader/processor ONCE, share it across all images
     # =========================================================================
-    # ÖNCEDEN: her runner'ın kendi __main__ bloğunda belirttiğimiz gibi,
-    # main.py her görsel için run_easyocr/run_trocr/run_doctr çağırırken
-    # model parametresini hiç vermiyordu — bu da modelin HER GÖRSEL İÇİN
-    # YENİDEN yüklenmesi anlamına geliyordu (20 görsel = 20 kez yükleme,
-    # TrOCR/doctr gibi ağır modellerde bu dakikalar sürebilir).
-    #
-    # ŞİMDİ: loader varsa (Tesseract'ta yok, gerçek bir model yükleme
-    # maliyeti olmadığı için None) burada SADECE BİR KEZ çağrılıyor, dönen
-    # nesne(ler) shared_kwargs eşlemesine göre run_function'a her görsel
-    # çağrısında aynı şekilde geçiriliyor.
+    # If `loader` is set, it's called a single time here, and the resulting
+    # object(s) are passed into every run_function call via shared_kwargs.
+    # This avoids reloading the model for every image (which would be slow
+    # and pointless for heavier engines like TrOCR or doctr). `loader` is
+    # None for engines with no real loading cost (e.g. Tesseract).
     shared_objects = {}
     shared_load_time = 0.0
     if loader is not None:
-        print(f"[{engine.upper()}] Model yükleniyor (bir kez)...")
+        print(f"[{engine.upper()}] Loading model (once)...")
         load_start = time.time()
         try:
             loaded = loader(str(config_path))
         except Exception as e:
-            # =====================================================================
-            # Model yüklenemiyorsa, tüm motor için işlemi NET bir mesajla durdur
-            # =====================================================================
-            # ÖNCEDEN: loader() çağrısı sarılmamıştı — bir model yüklenemediğinde
-            # (örn. PaddleOCR'da internet bağlantısı olmadan model indirilemediğinde)
-            # çıplak bir Python traceback'i görünüyordu. Bu okunabilir olsa da,
-            # "bu motoru atla, diğer motorlarla devam et" kararını vermek için
-            # programatik bir sinyal yoktu, ve hangi config/motorun sorumlu
-            # olduğu traceback'in içine gömülüydü.
-            #
-            # ŞİMDİ: hatayı yakalayıp NET bir mesajla bildiriyoruz, hangi
-            # motorun yüklenemediğini söylüyoruz, ve bu motor için işlemi
-            # durduruyoruz (görsel döngüsüne hiç girmiyoruz) — ama bu, başka
-            # bir motoru çalıştırmaya çalıştığınızda main.py'nin kendisini
-            # durdurmaz, sadece process_pipeline() bu çağrı için erken döner.
+            # If loading fails, report it clearly and stop processing for
+            # this engine — but this does not affect other engines you may
+            # call afterward in the same script.
             print(
-                f"[{engine.upper()}] HATA: Model/motor yüklenemedi, "
-                f"'{engine}' için işlem durduruldu. Olası sebepler: "
-                f"internet bağlantısı (model indirme), desteklenmeyen "
-                f"dil/config ayarı, ya da eksik bağımlılık. "
-                f"Config: {config_path}\n"
-                f"  Orijinal hata: {e}"
+                f"[{engine.upper()}] ERROR: Failed to load model for "
+                f"'{engine}'. Likely causes: no internet connection (model "
+                f"download), an unsupported language/config setting, or a "
+                f"missing dependency.\n"
+                f"  Config: {config_path}\n"
+                f"  Original error: {e}"
             )
             return
         shared_load_time = round(time.time() - load_start, 4)
         for loaded_key, kwarg_name in shared_kwargs_map.items():
             shared_objects[kwarg_name] = loaded[loaded_key]
-        print(f"[{engine.upper()}] Model yüklendi ({shared_load_time} sn), görseller işleniyor.")
+        print(f"[{engine.upper()}] Model loaded ({shared_load_time}s), processing images.")
 
     image_files = sorted(
         f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".png", ".jpg", ".jpeg"))
@@ -114,41 +101,19 @@ def process_pipeline(engine, model_name):
         try:
             output_data = run_function(str(img_path), str(config_path), **shared_objects)
         except Exception as e:
-            # =====================================================================
-            # Bir görseldeki hata TÜM pipeline'ı durdurmasın
-            # =====================================================================
-            # ÖNCEDEN: run_tesseract/run_easyocr/run_doctr/run_trocr içindeki
-            # `raise ValueError(...)` (bozuk/okunamayan görsel) ya da başka
-            # bir beklenmeyen hata, process_pipeline'ı olduğu yerde durdurup
-            # KALAN TÜM GÖRSELLERİ atlıyordu — 20 görselden 1'i bozuksa,
-            # kalan 19'u da işlenmiyordu.
-            #
-            # ŞİMDİ: hatayı yakalayıp konsola NET bir şekilde basıyoruz,
-            # bu görsel için JSON üretmiyoruz, ama döngü diğer görsellerle
-            # DEVAM EDİYOR.
-            print(f"[{engine.upper()} - {model_name}] HATA: {img_name} işlenemedi — {e}")
+            # A failure on one image (corrupt file, unsupported format, etc.)
+            # is reported and skipped — the batch continues with the rest.
+            print(f"[{engine.upper()} - {model_name}] ERROR: failed to process {img_name} — {e}")
             continue
 
         ground_truth_text, has_ground_truth = load_ground_truth(img_name)
         output_data["ground_truth"] = ground_truth_text
         output_data["has_ground_truth"] = has_ground_truth
 
-        # =====================================================================
-        # Paylaşılan model yükleme süresini JSON'a yansıt
-        # =====================================================================
-        # run_function (örn. run_easyocr) zaten reader/model dışarıdan
-        # geldiği için "load_time_seconds": 0.0 yazmıştı — bu, O GÖRSEL
-        # için doğruydu (gerçekten o çağrıda yükleme olmadı) ama gerçek
-        # yükleme süresi (yukarıda shared_load_time olarak ölçtüğümüz)
-        # hiçbir JSON'a yansımıyordu, kayboluyordu.
-        #
-        # Burada her görselin JSON'una motor için BİR KEZ ölçülmüş gerçek
-        # yükleme süresini yazıyoruz. ÖNEMLİ: bu değeri 20 görsel boyunca
-        # TOPLARSANIZ yükleme süresini 20 kez saymış olursunuz — oysa
-        # yükleme gerçekte 1 kez oldu. Bu yüzden "load_time_is_shared": true
-        # işaretini de ekliyoruz; raporlama/accuracy scripti bu motor için
-        # load_time_seconds'ı yalnızca BİR KEZ (örn. ilk görselden) sayıp
-        # diğerlerini atlamalı.
+        # The model-loading time measured once above is written into every
+        # image's JSON for this engine. `load_time_is_shared: true` flags
+        # this, so when aggregating across images you count it ONCE per
+        # engine, not once per image (the load only happened once).
         output_data["load_time_seconds"] = shared_load_time
         output_data["load_time_is_shared"] = loader is not None
 
@@ -157,16 +122,15 @@ def process_pipeline(engine, model_name):
             json.dump(output_data, f, ensure_ascii=False, indent=4)
 
         print(
-            f"[{engine.upper()} - {model_name}] İşlendi: {img_name} | "
-            f"Süre: {output_data.get('execution_time_seconds')} sn | "
+            f"[{engine.upper()} - {model_name}] Done: {img_name} | "
+            f"Time: {output_data.get('execution_time_seconds')}s | "
             f"GT: {has_ground_truth}"
         )
 
 
 if __name__ == "__main__":
-    #process_pipeline("paddleocr", "model_v1")
-    process_pipeline("easyocr", "model_v1")
-    process_pipeline("trocr", "model_v1")
-    process_pipeline("tesseract", "model_v1")
+    #process_pipeline("easyocr", "model_v1")
+    #process_pipeline("trocr", "model_v1")
+    #process_pipeline("tesseract", "model_v1")
     process_pipeline("doctr", "model_v1")
-    process_pipeline("rapidocr", "model_v1")
+    #process_pipeline("rapidocr", "model_v1")

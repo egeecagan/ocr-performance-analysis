@@ -1,27 +1,174 @@
 # =============================================================================
-# EasyOCR Config
+# EasyOCR — FULL Base Config (reference / example)
 # =============================================================================
-# reader_settings: Reader nesnesini oluşturmak için kullanılan ayarlar
-#   (languages, gpu). Bunlar değiştiğinde modelin YENİDEN yüklenmesi gerekir
-#   — load_time_seconds bu yüzden burada gerçek bir maliyet olarak ölçülür.
+# This file lists EVERY parameter EasyOCR's Reader class and readtext()
+# method accept, with their real defaults as comments. It is meant as a
+# REFERENCE you copy from — not all of these need to be set at once.
 #
-# readtext_settings: reader.readtext() çağrısına geçirilen serbest
-#   parametreler. Buraya İSTEDİĞİN KADAR satır ekleyebilirsin,
-#   filter_valid_kwargs() bunları otomatik olarak readtext'in kabul ettiği
-#   gerçek parametrelerle sınırlar; geçersiz bir anahtar kodu BOZMAZ.
+# Everything under reader_settings is consumed when the Reader is built
+# (once, at load time, in registry.py's _load_easyocr_reader / at the top
+# of run_easyocr.py). Everything under readtext_settings is consumed on
+# EVERY image, inside run_easyocr.py's call to reader.readtext(...).
 #
-# preprocessing: Tesseract config'indekiyle BİREBİR aynı şema, aynı
-#   _common.preprocess_image() fonksiyonunu kullanır.
+# Both blocks are filtered through filter_valid_kwargs() before being
+# passed to EasyOCR, so:
+#   - any key EasyOCR doesn't recognize is silently ignored (no crash)
+#   - any new EasyOCR parameter added in a future version works automatically,
+#     no code change needed — just add the key here
+#
+# `languages` and `gpu` are handled specially (see comments below); every
+# other key is passed straight through to the underlying EasyOCR call.
 # =============================================================================
 
+model_name: "easyocr_full_reference"
+
+# =============================================================================
+# reader_settings — consumed ONCE, when easyocr.Reader(...) is constructed
+# =============================================================================
 reader_settings:
+  # --- Handled specially by run_easyocr.py / registry.py, not passed raw ---
   languages: ["tr", "en"]
-  gpu: "auto"               # "auto": GPU varsa otomatik kullan | true/false: zorla aç/kapa
+  # Maps to Reader's `lang_list` parameter. List of language codes to
+  # recognize, e.g. ["ch_sim", "en"]. See EasyOCR's supported language list.
 
+  gpu: "auto"
+  # "auto": detect GPU automatically via torch.cuda.is_available()
+  # true / false: force GPU on/off regardless of what's available
+  # (EasyOCR's own default is `gpu=True`; "auto" is our own convenience option)
+
+  # --- Passed straight through to easyocr.Reader(...) ---
+  model_storage_directory: null
+  # (string, default None) Path to the directory for model data. If not
+  # specified, models are read from EASYOCR_MODULE_PATH (preferred),
+  # MODULE_PATH, or ~/.EasyOCR/.
+
+  user_network_directory: null
+  # (string, default None) Path to a user-defined recognition network.
+  # Default: MODULE_PATH + '/user_network'.
+
+  detect_network: "craft"
+  # (string, default 'craft') Name of the detection network.
+
+  recog_network: "standard"
+  # (string, default 'standard') Name of the recognition network.
+
+  download_enabled: true
+  # (bool, default True) Enable automatic model download.
+
+  detector: true
+  # (bool, default True) Load the detection model into memory.
+
+  recognizer: true
+  # (bool, default True) Load the recognition model into memory.
+
+  verbose: true
+  # (bool, default True) Print progress/log information.
+
+  quantize: true
+  # (bool, default True) Use a quantized model (smaller, faster, slightly
+  # lower precision) — relevant for low-spec/CPU-only deployments.
+
+  cudnn_benchmark: false
+  # (bool, default False) Enable cuDNN benchmark mode (GPU only, can speed
+  # up repeated inference at the cost of a slower first run).
+
+  font_path: null
+  # Not an EasyOCR parameter — our own addition, used by resolve_font_path()
+  # for rendering the masked visualization (optional).
+
+# =============================================================================
+# readtext_settings — consumed on EVERY image, inside reader.readtext(...)
+# =============================================================================
 readtext_settings:
-  detail: 1                # 1: bbox+prob ile birlikte; 0: sadece düz metin listesi
-  paragraph: false          # true: yakın satırları paragraf halinde birleştirir
+  # --- General ---
+  decoder: "greedy"
+  # (string, default 'greedy') Options: 'greedy', 'beamsearch', 'wordbeamsearch'.
 
+  beamWidth: 5
+  # (int, default 5) How many beams to keep when using beam search decoding.
+
+  batch_size: 1
+  # (int, default 1) Larger batch is faster but uses more memory.
+
+  workers: 0
+  # (int, default 0) Number of dataloader threads.
+
+  allowlist: null
+  # (string, default None) Force EasyOCR to recognize ONLY this subset of
+  # characters. Useful if you know the field only contains digits, etc.
+
+  blocklist: null
+  # (string, default None) Block this subset of characters. Ignored if
+  # allowlist is also given.
+
+  detail: 1
+  # (int, default 1) Set to 0 for a plain text list (no bbox/confidence).
+
+  paragraph: false
+  # (bool, default False) Combine nearby results into paragraphs.
+
+  min_size: 10
+  # (int, default 10) Filter out text boxes smaller than this (in pixels).
+
+  rotation_info: null
+  # (list, default None) Rotate each text box and keep the best result,
+  # e.g. [90, 180, 270] — useful for scanned documents with mixed orientation.
+
+  # --- Contrast ---
+  contrast_ths: 0.1
+  # (float, default 0.1) Low-contrast text boxes are processed twice.
+
+  adjust_contrast: 0.5
+  # (float, default 0.5) Target contrast level applied to low-contrast boxes.
+
+  # --- Text Detection (CRAFT) ---
+  text_threshold: 0.7
+  # (float, default 0.7) Text confidence threshold.
+
+  low_text: 0.4
+  # (float, default 0.4) Text low-bound score.
+
+  link_threshold: 0.4
+  # (float, default 0.4) Link confidence threshold.
+
+  canvas_size: 2560
+  # (int, default 2560) Maximum image size used internally for detection.
+
+  mag_ratio: 1.0
+  # (float, default 1) Image magnification ratio.
+
+  # --- Bounding Box Merging ---
+  # Controls when adjacent bounding boxes get merged into one. Except for
+  # slope_ths, units are expressed relative to box height.
+  slope_ths: 0.1
+  # (float, default 0.1) Maximum slope allowed for merging two boxes.
+
+  ycenter_ths: 0.5
+  # (float, default 0.5) Maximum shift allowed in the y direction.
+
+  height_ths: 0.5
+  # (float, default 0.5) Maximum difference allowed in box height.
+
+  width_ths: 0.5
+  # (float, default 0.5) Maximum horizontal distance allowed to merge boxes.
+
+  add_margin: 0.1
+  # (float, default 0.1) Extend bounding boxes in all directions — important
+  # for complex scripts like Thai.
+
+  x_ths: 1.0
+  # (float, default 1.0) Maximum horizontal distance to merge boxes when
+  # paragraph=True.
+
+  y_ths: 0.5
+  # (float, default 0.5) Maximum vertical distance to merge boxes when
+  # paragraph=True.
+
+# =============================================================================
+# preprocessing — shared schema across all 6 engines (see _common.py)
+# All steps default to false/disabled — enabling preprocessing here does
+# NOT guarantee improved accuracy, it should be measured against real data.
+# =============================================================================
 preprocessing:
   resize: false
   resize_scale: 2.0

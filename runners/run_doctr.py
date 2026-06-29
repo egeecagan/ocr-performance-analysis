@@ -6,7 +6,13 @@ import torch
 from doctr.models import ocr_predictor
 from doctr.io import DocumentFile
 
-from runners._common import preprocess_image, get_viz_dirs, load_config, save_preprocessed_image
+from runners._common import (
+    preprocess_image,
+    get_viz_dirs,
+    load_config,
+    save_preprocessed_image,
+    filter_valid_kwargs,
+)
 
 
 def run_doctr(image_path, config_path, model=None):
@@ -44,6 +50,36 @@ def run_doctr(image_path, config_path, model=None):
     else:
         gpu = bool(gpu_setting)
 
+    # Config'teki TÜM model_settings anahtarlarını, ocr_predictor'ın
+    # GERÇEKTEN kabul ettiği parametrelerle filtreleyip otomatik geçiriyoruz
+    # — EasyOCR'ın reader_settings/readtext_settings'inde kullandığımız aynı
+    # mekanizma. Bu sayede pretrained_backbone, assume_straight_pages,
+    # preserve_aspect_ratio, symmetric_pad, export_as_straight_boxes,
+    # detect_orientation, straighten_pages, detect_language gibi
+    # ocr_predictor'ın desteklediği HER parametre, config'e eklemeniz
+    # yeterli olacak şekilde otomatik çalışır — kod değişikliği gerekmez.
+    #
+    # Bu hesaplama BİLEREK `if model is None:` bloğunun DIŞINDA tutuluyor:
+    # model dışarıdan (main.py/registry.py üzerinden, paylaşılan bir
+    # nesne olarak) geldiğinde de extra_model_kwargs'ın TANIMLI olması
+    # gerekiyor, çünkü aşağıda settings_used alanına yazılırken
+    # kullanılıyor — sadece if model is None: bloğunun içinde tanımlanırsa,
+    # model dışarıdan geldiğinde (model is None False olduğunda) bu
+    # değişken hiç oluşmaz ve settings_used'a erişirken UnboundLocalError
+    # fırlatılır.
+    #
+    # det_arch/reco_arch/pretrained zaten kendi değişkenleriyle ayrı
+    # tutulup elle geçiriliyor; geri kalan her şey model_settings'ten
+    # filtrelenip eklenir.
+    extra_model_kwargs = filter_valid_kwargs(ocr_predictor, model_settings)
+    extra_model_kwargs.pop("det_arch", None)
+    extra_model_kwargs.pop("reco_arch", None)
+    extra_model_kwargs.pop("pretrained", None)
+    # ocr_predictor accepts **kwargs, so filter_valid_kwargs cannot tell
+    # our own config-only fields (gpu) apart from real ocr_predictor
+    # parameters — remove them explicitly.
+    extra_model_kwargs.pop("gpu", None)
+
     # --- load_time_seconds ---
     # EasyOCR/TrOCR'daki gibi burada da GERÇEK bir maliyet var:
     # ocr_predictor(...) detection + recognition modellerini diskten/
@@ -53,7 +89,10 @@ def run_doctr(image_path, config_path, model=None):
     if model is None:
         load_start = time.time()
         try:
-            model = ocr_predictor(det_arch=det_arch, reco_arch=reco_arch, pretrained=pretrained)
+            model = ocr_predictor(
+                det_arch=det_arch, reco_arch=reco_arch, pretrained=pretrained,
+                **extra_model_kwargs,
+            )
             if gpu:
                 model = model.cuda()
         except Exception as e:
@@ -258,6 +297,13 @@ def run_doctr(image_path, config_path, model=None):
             "det_arch": det_arch,
             "reco_arch": reco_arch,
             "pretrained": pretrained,
+            # Any extra model_settings keys (assume_straight_pages,
+            # preserve_aspect_ratio, detect_orientation, etc.) that were
+            # actually passed to ocr_predictor — without this, these
+            # settings would be used to build the model but invisible in
+            # the JSON output, making it impossible to tell from the
+            # result alone which exact configuration produced it.
+            **extra_model_kwargs,
         },
         "preprocessing_used": preprocessing_settings,
     }

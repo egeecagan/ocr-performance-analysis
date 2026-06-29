@@ -46,7 +46,26 @@ def run_easyocr(image_path, config_path, reader=None):
     if reader is None:
         load_start = time.time()
         try:
-            reader = easyocr.Reader(languages, gpu=gpu)
+            # Config'teki TÜM reader_settings anahtarlarını, easyocr.Reader'ın
+            # GERÇEKTEN kabul ettiği parametrelerle filtreleyip otomatik
+            # geçiriyoruz — readtext_settings'te zaten kullandığımız
+            # filter_valid_kwargs ile aynı mekanizma. Bu sayede
+            # model_storage_directory, recog_network, detector, recognizer,
+            # download_enabled, user_network_directory gibi EasyOCR'ın
+            # desteklediği HER parametre, config'e eklemeniz yeterli olacak
+            # şekilde otomatik çalışır — kod değişikliği gerekmez.
+            #
+            # languages ve gpu, Reader'ın ilk iki pozisyonel parametresi
+            # (lang_list, gpu) olduğu için ayrı tutulup elle geçiriliyor;
+            # geri kalan her şey reader_settings'ten filtrelenip eklenir.
+            extra_reader_kwargs = filter_valid_kwargs(easyocr.Reader.__init__, reader_settings)
+            # languages/gpu zaten kendi mantığıyla (gpu "auto" çözümlemesi
+            # gibi) ele alındığı için, ham config değerleriyle çakışmasınlar
+            # diye extra_reader_kwargs'tan çıkarıyoruz.
+            extra_reader_kwargs.pop("lang_list", None)
+            extra_reader_kwargs.pop("gpu", None)
+
+            reader = easyocr.Reader(languages, gpu=gpu, **extra_reader_kwargs)
         except Exception as e:
             # EasyOCR bazı dil kombinasyonlarını desteklemez (örn. bazı
             # Latin-olmayan scriptler birlikte kullanılamaz). Kütüphanenin

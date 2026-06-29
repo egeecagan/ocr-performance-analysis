@@ -1,29 +1,103 @@
 # =============================================================================
-# doctr OCR Config
+# doctr — FULL Base Config (reference / example)
 # =============================================================================
-# model_settings: ocr_predictor(...) oluşturmak için kullanılan ayarlar.
-#   det_arch/reco_arch değiştiğinde modelin YENİDEN yüklenmesi gerekir —
-#   load_time_seconds bu yüzden gerçek bir maliyet olarak ölçülür.
+# This file lists EVERY parameter doctr's ocr_predictor() function accepts,
+# with real defaults and valid options as comments. It is meant as a
+# REFERENCE you copy from — not all of these need to be set at once.
 #
-#   gpu: "auto" (varsayılan) -> GPU varsa otomatik kullanılır.
-#        true/false yazarsanız zorlama olarak kullanılır.
+# Everything under model_settings is consumed ONCE, when ocr_predictor(...)
+# is constructed (in registry.py's _load_doctr_model / at the top of
+# run_doctr.py). There is no per-image equivalent block for doctr (unlike
+# EasyOCR's readtext_settings) — doctr's prediction call doesn't take
+# extra runtime parameters beyond what's baked into the model at creation.
 #
-# preprocessing: Tesseract/EasyOCR config'leriyle BİREBİR aynı şema, aynı
-#   ortak _common.preprocess_image() fonksiyonunu kullanır.
+# All keys are filtered through filter_valid_kwargs() before being passed
+# to ocr_predictor, so any key it doesn't recognize is silently ignored.
+# NOTE: ocr_predictor itself accepts **kwargs, so filter_valid_kwargs
+# cannot reject typos the way it does for EasyOCR — an invalid combination
+# will surface as an error from doctr itself when the model is built,
+# which run_doctr.py/registry.py catch and report clearly.
 # =============================================================================
 
-model_name: "doctr_v1"
+model_name: "doctr_full_reference"
 
+# =============================================================================
+# model_settings — consumed ONCE, when ocr_predictor(...) is constructed
+# =============================================================================
 model_settings:
+  # --- Handled specially by run_doctr.py / registry.py, not passed raw ---
   det_arch: "db_resnet50"
-  reco_arch: "crnn_vgg16_bn"
-  pretrained: true        # !!! false yaparsan EĞİTİLMEMİŞ/rastgele model kurulur,
-                            # OCR karşılaştırması için ANLAMSIZ sonuç verir.
-                            # Sadece kendi verinizle sıfırdan eğitim yapacaksanız
-                            # false kullanın. Yanlışlıkla false bırakılırsa kod
-                            # konsola uyarı basar ama çalışmayı durdurmaz.
-  gpu: "auto"
+  # (string) Detection architecture. Valid options (doctr 1.0.1):
+  #   "db_resnet34", "db_resnet50", "db_mobilenet_v3_large",
+  #   "linknet_resnet18", "linknet_resnet34", "linknet_resnet50",
+  #   "fast_tiny", "fast_small", "fast_base"
+  # doctr's OWN default is "fast_base" — we default to "db_resnet50" for
+  # consistency with our original setup. For low-spec hardware, the
+  # "fast_*" and "*_mobilenet_*" variants are worth comparing.
 
+  reco_arch: "crnn_vgg16_bn"
+  # (string) Recognition architecture. Valid options (doctr 1.0.1):
+  #   "crnn_vgg16_bn", "crnn_mobilenet_v3_small", "crnn_mobilenet_v3_large",
+  #   "sar_resnet31", "master", "vitstr_small", "vitstr_base", "parseq",
+  #   "viptr_tiny"
+  # The "*_mobilenet_*" and "*tiny*" variants are the lighter options for
+  # low-spec hardware; "master"/"parseq"/"sar_resnet31" trade speed for
+  # accuracy.
+
+  pretrained: true
+  # !!! Setting this to false builds the model with RANDOM (untrained)
+  # weights — valid only if you're training from scratch on your own data.
+  # For OCR comparison purposes this produces meaningless output and does
+  # NOT raise an error; run_doctr.py prints a console warning if this is
+  # left false, but does not stop execution.
+
+  gpu: "auto"
+  # Not a real ocr_predictor parameter — our own addition, removed before
+  # the call reaches ocr_predictor (it accepts **kwargs, so it would
+  # otherwise be silently passed through and likely ignored or error).
+  # "auto": detect GPU automatically via torch.cuda.is_available()
+  # true / false: force GPU on/off regardless of what's available
+
+  # --- Passed straight through to ocr_predictor(...) ---
+  pretrained_backbone: true
+  # (bool, default True) Whether to use a pretrained backbone for the
+  # underlying feature extractor (independent of the `pretrained` flag
+  # above, which controls the full detection+recognition heads).
+
+  assume_straight_pages: true
+  # (bool, default True) Assume input pages are not rotated/skewed. Set to
+  # false if your documents (e.g. phone photos) may be rotated.
+
+  preserve_aspect_ratio: true
+  # (bool, default True) Preserve the aspect ratio of the input image
+  # during preprocessing/resizing.
+
+  symmetric_pad: true
+  # (bool, default True) Pad the image symmetrically (vs. only on one
+  # side) when preserve_aspect_ratio requires padding.
+
+  export_as_straight_boxes: false
+  # (bool, default False) Force exporting detected boxes as straight
+  # (axis-aligned) rectangles, even if assume_straight_pages is false.
+
+  detect_orientation: false
+  # (bool, default False) Run an additional orientation-classification
+  # step to detect whether the page is rotated (0/90/180/270).
+
+  straighten_pages: false
+  # (bool, default False) Automatically rotate pages to a straight
+  # orientation before detection/recognition (uses detect_orientation
+  # internally).
+
+  detect_language: false
+  # (bool, default False) Run an additional language-detection step on
+  # the recognized text.
+
+# =============================================================================
+# preprocessing — shared schema across all 6 engines (see _common.py)
+# All steps default to false/disabled — enabling preprocessing here does
+# NOT guarantee improved accuracy, it should be measured against real data.
+# =============================================================================
 preprocessing:
   resize: false
   resize_scale: 2.0
@@ -52,4 +126,4 @@ preprocessing:
 
   threshold: false
   threshold_block_size: 35
-  threshold_c: 11
+  threshold_c: 11 
