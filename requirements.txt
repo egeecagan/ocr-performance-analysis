@@ -1,0 +1,44 @@
+# =============================================================================
+# OCR Performans Karşılaştırma Projesi — requirements.txt
+# =============================================================================
+# Bu dosya, projenin runners/*.py dosyalarında DOĞRUDAN import edilen
+# paketleri listeler (transitive/alt bağımlılıklar dahil değildir — pip
+# bunları otomatik çözer). Sürümler, sizin çalışan venv'inizden alınmıştır.
+#
+# Not: Tesseract'ın kendisi (binary) bu dosyada YOKTUR — ayrıca sistem
+# paketi olarak kurulmalıdır:
+#   macOS:   brew install tesseract tesseract-lang
+#   Ubuntu:  apt install tesseract-ocr tesseract-ocr-tur
+#
+# PaddleOCR/paddlepaddle Apple Silicon Mac'te sorunlu olabilir — bu durumda
+# Docker üzerinden çalıştırın (bkz. Dockerfile, kurulumu bu dosyadan
+# bağımsızdır).
+# =============================================================================
+
+# --- Ortak (4 farklı görsel işleme kütüphanesi tarafından kullanılıyor) ---
+opencv-python-headless==4.13.0.92
+numpy==2.3.5
+pillow==12.2.0
+PyYAML==6.0.2
+
+# --- Tesseract ---
+pytesseract==0.3.13
+
+# --- EasyOCR ---
+easyocr==1.7.2
+
+# --- doctr ---
+python-doctr==1.0.1
+
+# --- TrOCR ---
+transformers==5.12.1
+torch==2.12.1
+
+# --- RapidOCR ---
+rapidocr==3.9.0
+
+# --- PaddleOCR ---
+# NOT: paddlepaddle Apple Silicon Mac'te desteklenmeyebilir — bu durumda
+# bu iki satırı yorum satırı yapıp PaddleOCR'ı Docker üzerinden çalıştırın.
+# paddleocr==3.7.0
+# paddlepaddle
