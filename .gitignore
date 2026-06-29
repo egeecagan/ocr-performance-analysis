@@ -1,0 +1,51 @@
+# =============================================================================
+# Proje verisi — input görselleri ve output çıktıları repoya gitmesin
+# =============================================================================
+
+# Input görselleri (ehliyet/dekont gibi hassas/kişisel veriler içerebilir)
+inputs/images/
+inputs/truths/
+
+# Tüm OCR çıktıları (JSON sonuçları + highlighted/masked viz görselleri)
+outputs/
+
+# doctr preprocessing için kullanılan geçici dosyalar (run_doctr.py içinde
+# outputs/_tmp_preprocessed/ altına yazılıp siliniyor, yine de garantiye alalım)
+outputs/_tmp_preprocessed/
+
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# =============================================================================
+# Model ağırlıkları / indirilen dosyalar (EasyOCR, doctr, TrOCR diske
+# model dosyaları indirir — bunlar genelde GB boyutunda, repoya gitmemeli)
+# =============================================================================
+*.pth
+*.pt
+*.onnx
+.EasyOCR/
+~/.cache/
+
+# =============================================================================
+# IDE / OS
+# =============================================================================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# =============================================================================
+# Ortam değişkenleri (varsa API key vb. için)
+# =============================================================================
+.env

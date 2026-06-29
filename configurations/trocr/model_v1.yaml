@@ -1,0 +1,62 @@
+# =============================================================================
+# TrOCR Config
+# =============================================================================
+# - ocr_settings: model/font ile ilgili temel ayarlar.
+# - generate_settings: model.generate(...)'e geçirilen TÜM parametreler.
+#
+# ÖNEMLİ NOT: model.generate(**kwargs) Hugging Face'te serbest **kwargs kabul
+# ediyor (generation_config üzerinden de çalışabiliyor). Bu yüzden EasyOCR'daki
+# gibi "yazım hatası sessizce elenir" garantisi BURADA YOK — generate() her
+# anahtarı kabul eder, geçersiz bir parametre yazarsan çalışma anında hata
+# alabilirsin. Parametre adlarını yazarken dikkatli ol.
+#
+# Bazı parametreler BİRLİKTE çalışmak zorunda:
+#   - temperature, top_k, top_p  -> etkili olmaları için do_sample: true olmalı.
+#     do_sample: false (varsayılan) ise bu üçü sessizce YOK SAYILIR.
+#   - num_beams > 1 ise beam search aktif olur; do_sample ile birlikte
+#     kullanılabilir (beam search + sampling).
+#
+# Tam parametre listesi:
+#   https://huggingface.co/docs/transformers/main_classes/text_generation
+# =============================================================================
+
+model_name: "trocr_v1"
+
+ocr_settings:
+  model_name: "microsoft/trocr-base-handwritten"  # veya "microsoft/trocr-base-printed" vs.
+
+  # --- Masked görsel için font ayarları ---
+  font_size: 24
+  # font_path: "/path/to/custom_font.ttf"  # Elle belirtmek istersen; boşsa OS'a göre otomatik seçilir
+
+generate_settings:
+  # ---------------------------------------------------------------------
+  # Uzunluk kontrolü
+  # ---------------------------------------------------------------------
+  max_new_tokens: 64          # Üretilecek maksimum token sayısı (uzun metinlerde artır)
+  # min_new_tokens: 1          # Üretilecek minimum token sayısı
+
+  # ---------------------------------------------------------------------
+  # Beam search (deterministik, daha kaliteli ama daha yavaş)
+  # ---------------------------------------------------------------------
+  num_beams: 1                 # 1 = beam search kapalı (greedy). Artırmak doğruluğu artırabilir, yavaşlatır.
+  early_stopping: false        # num_beams kadar tamamlanmış aday bulununca dursun mu
+
+  # ---------------------------------------------------------------------
+  # Sampling (rastgelelik) — ETKİLİ OLMASI İÇİN do_sample: true OLMALI
+  # ---------------------------------------------------------------------
+  do_sample: false              # true yaparsan temperature/top_k/top_p devreye girer
+  # temperature: 1.0             # < 1 daha "kararlı", > 1 daha "yaratıcı/rastgele" çıktı
+  # top_k: 50
+  # top_p: 1.0
+
+  # ---------------------------------------------------------------------
+  # Tekrarı önleme
+  # ---------------------------------------------------------------------
+  repetition_penalty: 1.0       # 1.0 = ceza yok. >1.0 tekrar eden tokenleri cezalandırır.
+  # no_repeat_ngram_size: 0      # > 0 ise bu boyuttaki ngram'lar bir kez geçebilir
+
+  # ---------------------------------------------------------------------
+  # Buraya yeni parametre eklemek için örnek satır
+  # ---------------------------------------------------------------------
+  # length_penalty: 1.0

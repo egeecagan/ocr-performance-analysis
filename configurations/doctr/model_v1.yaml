@@ -1,0 +1,16 @@
+# =============================================================================
+# DocTR Config
+# =============================================================================
+# model_settings altındaki ayarlar ocr_predictor(...) çağrısına geçiriliyor.
+#
+# Desteklenen mimariler için (değişebilir, güncel liste için doctr dokümantasyonuna bak):
+#   det_arch:  "db_resnet50" | "db_resnet34" | "db_mobilenet_v3_large" | "linknet_resnet18" ...
+#   reco_arch: "crnn_vgg16_bn" | "crnn_mobilenet_v3_small" | "master" | "sar_resnet31" | "parseq" ...
+# =============================================================================
+
+model_name: "doctr_v1"
+
+model_settings:
+  det_arch: "db_resnet50"        # Metin tespit (detection) mimarisi
+  reco_arch: "crnn_vgg16_bn"     # Metin tanıma (recognition) mimarisi
+  pretrained: true                # Önceden eğitilmiş ağırlıkları kullan

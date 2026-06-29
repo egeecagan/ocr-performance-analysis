@@ -1,0 +1,55 @@
+# =============================================================================
+# EasyOCR Config
+# =============================================================================
+# reader_settings: Reader nesnesini oluşturmak için kullanılan ayarlar
+#   (languages, gpu). Bunlar değiştiğinde modelin YENİDEN yüklenmesi gerekir
+#   — load_time_seconds bu yüzden burada gerçek bir maliyet olarak ölçülür.
+#
+# readtext_settings: reader.readtext() çağrısına geçirilen serbest
+#   parametreler. Buraya İSTEDİĞİN KADAR satır ekleyebilirsin,
+#   filter_valid_kwargs() bunları otomatik olarak readtext'in kabul ettiği
+#   gerçek parametrelerle sınırlar; geçersiz bir anahtar kodu BOZMAZ.
+#
+# preprocessing: Tesseract config'indekiyle BİREBİR aynı şema, aynı
+#   _common.preprocess_image() fonksiyonunu kullanır.
+# =============================================================================
+
+model_name: "easyocr_v1"
+
+reader_settings:
+  languages: ["tr", "en"]
+  gpu: "auto"               # "auto": GPU varsa otomatik kullan | true/false: zorla aç/kapa
+
+readtext_settings:
+  detail: 1                # 1: bbox+prob ile birlikte; 0: sadece düz metin listesi
+  paragraph: false          # true: yakın satırları paragraf halinde birleştirir
+
+preprocessing:
+  resize: false
+  resize_scale: 2.0
+
+  deskew: false
+
+  autocrop_border: false
+  autocrop_margin_ratio: 0.01
+
+  illumination_correct: false
+  illumination_kernel_size: 51
+
+  grayscale: false
+
+  clahe: false
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+
+  denoise: false
+
+  sharpen: false
+
+  morphology: false
+  morphology_op: "dilate"
+  morphology_kernel_size: 2
+
+  threshold: false
+  threshold_block_size: 35
+  threshold_c: 11
