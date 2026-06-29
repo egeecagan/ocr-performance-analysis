@@ -1,0 +1,30 @@
+ocr_settings:
+  lang_type: tr
+  font_path: null
+  model_selection:
+    Det:
+      model_type: medium
+    Cls:
+      model_type: mobile
+    Rec:
+      model_type: medium
+preprocessing:
+  resize: false
+  resize_scale: 2.0
+  deskew: false
+  autocrop_border: false
+  autocrop_margin_ratio: 0.01
+  illumination_correct: false
+  illumination_kernel_size: 51
+  grayscale: false
+  clahe: false
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+  denoise: false
+  sharpen: false
+  morphology: false
+  morphology_op: dilate
+  morphology_kernel_size: 2
+  threshold: false
+  threshold_block_size: 35
+  threshold_c: 11

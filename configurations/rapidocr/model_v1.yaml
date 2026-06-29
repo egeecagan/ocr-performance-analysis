@@ -1,0 +1,88 @@
+# =============================================================================
+# RapidOCR Config
+# =============================================================================
+# ocr_settings.lang_type: RapidOCR'da dil parametresi Tesseract'tan FARKLI
+#   bir formattadır — Tesseract "tur+eng" gibi birleşik kodlar kullanırken,
+#   RapidOCR (PP-OCRv6 modeliyle) TEK BİR dil kodu bekler: "tr", "en", "ch"
+#   gibi. "latin" diye genel bir kategori PP-OCRv6'da YOK — Türkçe için
+#   doğrudan "tr" kodu kullanılır (PP-OCRv6, Türkçe'yi ayrı bir dil olarak
+#   destekliyor, 50'den fazla dil arasında).
+#
+#   NOT: RapidOCR'ın Türkçe karakter desteği (ş, ğ, ı, ö, ü, ç) Tesseract/
+#   EasyOCR'dan farklı bir sözlük/eğitim verisi kullanıyor — raporunuzda
+#   bu üçünü gerçek Türkçe karakterli görsellerle ayrıca kıyaslamanız
+#   faydalı olur.
+#
+# ocr_settings.model_selection: Det (detection), Cls (yön sınıflandırma),
+#   Rec (recognition) modüllerinin HANGİ BOYUTTA çalışacağını bağımsız
+#   olarak kontrol eder. Her modül için ikisinden BİRİNİ kullanın:
+#
+#   1. model_type: "tiny" | "small" | "mobile" | "medium" | "server"
+#      Hangi boyutların geçerli olduğu modüle göre değişir:
+#        - Det:  tiny / small / mobile / medium / server
+#        - Cls:  sadece mobile (RapidOCR'da Cls için tek boyut var)
+#        - Rec:  tiny / small / medium
+#      Genel eğilim: tiny en hafif/hızlı/az doğru, server en ağır/yavaş/
+#      en doğru. "small" RapidOCR'ın kendi varsayılanı ve pakete gömülü
+#      geliyor (ek indirme gerektirmez). "tiny" ve "medium" ilk kullanımda
+#      İNTERNETTEN inecek.
+#
+#   2. model_path: Kendi/özel bir .onnx model dosyanızın TAM YOLU.
+#      Verilirse model_type YOK SAYILIR — resmi PP-OCRv6 modelleri dışında
+#      kendi eğittiğiniz veya başka bir kaynaktan indirdiğiniz modeli
+#      kullanmanızı sağlar.
+#
+#   Hiçbir model_selection ayarı yoksa RapidOCR'ın kendi varsayılanları
+#   kullanılır (Det/Rec: small, Cls: mobile) — bu da `model_v1` (bu
+#   dosya) için seçilen davranış.
+#
+# preprocessing: diğer motorların config'leriyle BİREBİR aynı şema, aynı
+#   ortak _common.preprocess_image() fonksiyonunu kullanır.
+# =============================================================================
+
+ocr_settings:
+  lang_type: "tr"           # PP-OCRv6 dil kodu: "tr" | "en" | "ch" | ...
+  font_path: null            # opsiyonel, masked görselde kullanılacak font
+
+  # Bu blok TAMAMEN opsiyonel. Boş/yorum satırı bırakılırsa RapidOCR'ın
+  # kendi varsayılanları (small/mobile) kullanılır.
+  model_selection:
+    Det:
+      model_type: "small"     # tiny | small | mobile | medium | server
+      # model_path: "/tam/yol/kendi_det_modelim.onnx"  # verilirse model_type yok sayılır
+    Cls:
+      model_type: "mobile"    # RapidOCR'da Cls için şu an tek seçenek
+      # model_path: "/tam/yol/kendi_cls_modelim.onnx"
+    Rec:
+      model_type: "small"     # tiny | small | medium
+      # model_path: "/tam/yol/kendi_rec_modelim.onnx"
+
+preprocessing:
+  resize: false
+  resize_scale: 2.0
+
+  deskew: false
+
+  autocrop_border: false
+  autocrop_margin_ratio: 0.01
+
+  illumination_correct: false
+  illumination_kernel_size: 51
+
+  grayscale: false
+
+  clahe: false
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+
+  denoise: false
+
+  sharpen: false
+
+  morphology: false
+  morphology_op: "dilate"
+  morphology_kernel_size: 2
+
+  threshold: false
+  threshold_block_size: 35
+  threshold_c: 11

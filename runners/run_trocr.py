@@ -1,118 +1,180 @@
 import os
 import time
-import inspect
-import platform
-import torch
-import yaml
 import cv2
+import torch
 import numpy as np
-from pathlib import Path
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from PIL import Image, ImageDraw, ImageFont
 
-
-def load_config(config_path):
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def filter_valid_kwargs(func, kwargs):
-    """
-    Config'ten gelen kwargs sözlüğünü, hedef fonksiyonun (örn. model.generate)
-    GERÇEKTEN kabul ettiği parametrelerle sınırlar.
-
-    Not: model.generate(**model_kwargs) gibi bazı HF fonksiyonları **kwargs
-    ile serbest argüman da kabul edebiliyor, bu durumda inspect.signature
-    VAR_KEYWORD parametresini görür ve her şeyi geçerli sayar — bu istenen
-    davranış, çünkü generate() çoğu zaman generation_config üzerinden de
-    parametre kabul eder.
-    """
-    sig = inspect.signature(func)
-    params = sig.parameters
-
-    # Eğer fonksiyon **kwargs kabul ediyorsa (VAR_KEYWORD), her şeyi geçir
-    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
-        return dict(kwargs)
-
-    valid_params = set(params.keys())
-    return {k: v for k, v in kwargs.items() if k in valid_params}
-
-
-def resolve_font_path(config_font_path=None):
-    """
-    Masked görselde metni yazdırmak için gerçek bir TrueType font bulur.
-    ImageFont.load_default() Türkçe karakterleri (ş, ğ, ı, ö, ü, ç) düzgün
-    render etmediği için tercih edilmez.
-    """
-    if config_font_path and os.path.exists(config_font_path):
-        return config_font_path
-
-    system = platform.system()
-    candidates = []
-    if system == "Darwin":
-        candidates = ["/Library/Fonts/Arial.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf"]
-    elif system == "Linux":
-        candidates = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        ]
-    elif system == "Windows":
-        candidates = ["C:\\Windows\\Fonts\\arial.ttf"]
-
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-
-    return None
+from runners._common import (
+    load_config,
+    resolve_font_path,
+    filter_valid_kwargs,
+    preprocess_image,
+    get_viz_dirs,
+    save_preprocessed_image,
+)
 
 
 def run_trocr(image_path, config_path, processor=None, model=None):
     config = load_config(config_path)
     settings = config.get("ocr_settings", {})
     generate_settings = config.get("generate_settings", {}) or {}
+    preprocessing_settings = config.get("preprocessing", {}) or {}
 
     model_name = settings.get("model_name", "microsoft/trocr-base-handwritten")
     font_path_config = settings.get("font_path")
     font_size = settings.get("font_size", 24)
 
-    # Modelleri yükle — dışarıdan geçirilmediyse burada bir kere yüklenir (süreye dahil değil)
-    if processor is None:
-        processor = TrOCRProcessor.from_pretrained(model_name)
-    if model is None:
-        model = VisionEncoderDecoderModel.from_pretrained(model_name)
+    # --- GPU seçimi ---
+    # Diğer 3 motorla (EasyOCR, doctr) tutarlı: "auto" -> otomatik tespit,
+    # true/false -> zorlama. Önceki versiyonda bu sabitti
+    # (torch.cuda.is_available() direkt kullanılıyordu, config'ten
+    # kontrol edilemiyordu) — artık CPU'da test etmek istediğinizde
+    # GPU'nuz olsa bile zorlayabilirsiniz.
+    gpu_setting = settings.get("gpu", "auto")
+    if gpu_setting == "auto":
+        gpu = torch.cuda.is_available()
+    else:
+        gpu = bool(gpu_setting) and torch.cuda.is_available()
+    device = "cuda" if gpu else "cpu"
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device)
+    # --- load_time_seconds ---
+    # EasyOCR/doctr'daki gibi burada da GERÇEK bir maliyet var:
+    # TrOCRProcessor.from_pretrained(...) ve VisionEncoderDecoderModel.
+    # from_pretrained(...) modelleri diskten/internetten yükler — TrOCR
+    # transformer tabanlı olduğu için bu genelde EasyOCR/doctr'dan da AĞIR
+    # olabilir. processor/model dışarıdan enjekte edilmemişse (main.py her
+    # görsel için yeniden oluşturuyorsa) bu maliyet her çağrıda tekrar
+    # tekrar ödenir.
+    needs_loading = (processor is None) or (model is None)
+
+    if needs_loading:
+        load_start = time.time()
+        try:
+            if processor is None:
+                processor = TrOCRProcessor.from_pretrained(model_name)
+            if model is None:
+                model = VisionEncoderDecoderModel.from_pretrained(model_name)
+        except Exception as e:
+            raise RuntimeError(
+                f"TrOCR modeli/processor'ı oluşturulamadı (model_name="
+                f"{model_name}, config: {config_path}). Orijinal hata: {e}"
+            ) from e
+        model.to(device)
+        load_time = round(time.time() - load_start, 4)
+    else:
+        # Hem processor hem model dışarıdan (main.py'de bir kez oluşturulup
+        # tüm görseller için tekrar kullanılıyorsa) geldiyse, bu çağrıda
+        # yükleme maliyeti yok. Cihaza taşıma da zaten önceden yapılmış
+        # olmalı, burada tekrar etmiyoruz.
+        load_time = 0.0
+
+    # --- image_load_time_seconds: görseli diskten okuma süresi ---
+    image_load_start = time.time()
+    img_bgr = cv2.imread(image_path)
+    image_load_time = round(time.time() - image_load_start, 4)
+
+    if img_bgr is None:
+        raise ValueError(
+            f"Görsel okunamadı (bozuk dosya, desteklenmeyen format ya da "
+            f"yol hatalı olabilir): {image_path}"
+        )
+
+    # --- preprocessing_time_seconds ---
+    # Sadece preprocess_image() çağrısının kendisi ölçülüyor. PIL'e
+    # dönüştürme (TrOCR'a özgü bir adım, diğer 3 motorda yok) ayrı bir
+    # alanda (pil_conversion_time_seconds) tutuluyor.
+    preprocessing_start = time.time()
+    ocr_input = preprocess_image(img_bgr, preprocessing_settings)
+    preprocessing_time = round(time.time() - preprocessing_start, 4)
+
+    # --- Kanal güvenliği ---
+    # preprocess_image bazı adımlardan sonra tek kanallı (2D) görsel
+    # döndürebilir. TrOCR'ın processor'ı 3 kanallı RGB bekler — bu yüzden
+    # tek kanallıysa önce 3 kanala (BGR), sonra RGB'ye çeviriyoruz.
+    if len(ocr_input.shape) == 2:
+        ocr_input = cv2.cvtColor(ocr_input, cv2.COLOR_GRAY2BGR)
+
+    # TrOCR/HuggingFace processor'ı PIL Image (RGB) bekler; cv2 BGR
+    # kullanır. Bu dönüşüm sadece TrOCR'a özgü (diğer 3 motorda yok), bu
+    # yüzden preprocessing_time'dan AYRI, kendi alanında ölçülüyor.
+    pil_conversion_start = time.time()
+    image = Image.fromarray(cv2.cvtColor(ocr_input, cv2.COLOR_BGR2RGB))
+    pil_conversion_time = round(time.time() - pil_conversion_start, 4)
+
+    highlighted_dir, masked_dir, preprocessed_dir = get_viz_dirs(config_path)
+    img_name = os.path.basename(image_path)
+
+    # OCR motoruna giden görseli (preprocessing kapalıysa ham hali) her
+    # zaman kaydediyoruz — diğer 3 motorla tutarlı.
+    save_preprocessed_image(ocr_input, preprocessed_dir, img_name)
 
     # Config'teki TÜM generate_settings anahtarlarını, model.generate'in kabul
     # ettiği gerçek parametrelerle filtreleyip otomatik geçiriyoruz.
-    # Yeni bir parametre eklemek istediğinde SADECE YAML dosyasını
-    # değiştirmen yeterli — bu fonksiyona dokunmana gerek kalmaz.
     valid_generate_kwargs = filter_valid_kwargs(model.generate, generate_settings)
 
-    start_time = time.time()  # Süre BURADA başlar
+    # generate() çağrısının kendi confidence/score bilgisini alabilmek için
+    # output_scores ve return_dict_in_generate'i zorluyoruz — bu, config'te
+    # ne yazılırsa yazılsın avg_confidence hesaplamamız için gerekli.
+    # filter_valid_kwargs zaten generate VAR_KEYWORD kabul ettiği için bu
+    # ek parametreler reddedilmeyecek.
+    confidence_kwargs = dict(valid_generate_kwargs)
+    confidence_kwargs["output_scores"] = True
+    confidence_kwargs["return_dict_in_generate"] = True
 
-    image = Image.open(image_path).convert("RGB")
+    start_time = time.time()  # Süre BURADA başlar — model yükleme VE
+    # preprocessing süreye dahil değil, sadece "OCR motorunun kendisi ne
+    # kadar sürdü" ölçülüyor (diğer 3 motordaki ile aynı prensip).
+
     pixel_values = processor(images=image, return_tensors="pt").pixel_values.to(device)
 
-    generated_ids = model.generate(pixel_values, **valid_generate_kwargs)
+    try:
+        generated = model.generate(pixel_values, **confidence_kwargs)
+        generated_ids = generated.sequences
+        scores_available = True
+    except Exception:
+        # Bazı TrOCR/transformers sürüm kombinasyonlarında output_scores
+        # beklenmeyen bir generate() davranışına yol açabilir (örn. bazı
+        # generation stratejileriyle uyumsuzluk). Bu durumda güvenli
+        # şekilde confidence'sız çalışmaya geri dönüyoruz — OCR'ın kendisi
+        # bundan etkilenmemeli.
+        generated_ids = model.generate(pixel_values, **valid_generate_kwargs)
+        scores_available = False
+
     text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
 
     execution_time = round(time.time() - start_time, 4)  # Süre BURADA donar
 
+    # --- avg_confidence ---
+    # TrOCR'da Tesseract/EasyOCR/doctr'daki gibi kelime bazlı bir confidence
+    # yok (TrOCR bbox da üretmiyor). Bunun yerine, generate() çağrısından
+    # token bazlı olasılıkları (transition_scores) alıp ortalamasını
+    # 0-100 skalasına çeviriyoruz — diğer motorlarla aynı eksende
+    # kıyaslanabilir bir sayı elde etmek için. scores hiç alınamadıysa
+    # (yukarıdaki fallback'e düşüldüyse) None döndürüyoruz; bu "ölçülmedi"
+    # anlamına gelir, gerçek bir 0 değil.
+    if scores_available:
+        try:
+            transition_scores = model.compute_transition_scores(
+                generated.sequences, generated.scores, normalize_logits=True
+            )
+            # -inf olabilecek pad/eos sonrası skorları filtrele
+            valid_scores = transition_scores[transition_scores > -float("inf")]
+            if len(valid_scores) > 0:
+                avg_log_prob = valid_scores.mean().item()
+                avg_confidence = round(float(np.exp(avg_log_prob)) * 100, 2)
+            else:
+                avg_confidence = None
+        except Exception:
+            # compute_transition_scores bazı model/sürüm kombinasyonlarında
+            # farklı davranabilir; hata durumunda sessizce None'a düşüyoruz,
+            # OCR sonucunu (text) etkilemiyoruz.
+            avg_confidence = None
+    else:
+        avg_confidence = None
+
     # --- Buradan sonrası süreye dahil değil: görselleştirme/raporlama ---
-
-    # viz klasörünü config_path'ten türet: configurations/trocr/model_v1.yaml
-    # -> outputs/trocr/model_v1/viz/...
-    config_p = Path(config_path)
-    engine = config_p.parent.name        # "trocr"
-    config_model_name = config_p.stem     # "model_v1"
-
-    viz_dir = os.path.join('outputs', engine, config_model_name, 'viz')
-    highlighted_dir = os.path.join(viz_dir, 'highlighted')
-    masked_dir = os.path.join(viz_dir, 'masked')
-    os.makedirs(highlighted_dir, exist_ok=True)
-    os.makedirs(masked_dir, exist_ok=True)
 
     # --- Masked: beyaz sayfaya metni yaz (gerçek font + otomatik satır kaydırma) ---
     font_path = resolve_font_path(font_path_config)
@@ -155,15 +217,36 @@ def run_trocr(image_path, config_path, processor=None, model=None):
     highlighted_img = cv2.addWeighted(overlay, alpha, img_cv, 1 - alpha, 0)
 
     # Kayıtlar
-    img_name = os.path.basename(image_path)
     masked_img.save(os.path.join(masked_dir, f"masked_{img_name}"))
     cv2.imwrite(os.path.join(highlighted_dir, f"highlighted_{img_name}"), highlighted_img)
 
+    total_time = round(
+        image_load_time + preprocessing_time + pil_conversion_time + execution_time, 4
+    )
+
     return {
         "text": text,
+        "load_time_seconds": load_time,
+        "image_load_time_seconds": image_load_time,
+        "preprocessing_time_seconds": preprocessing_time,
+        # pil_conversion_time_seconds: TrOCR'a özgü bir adım (diğer 3
+        # motorda yok) — OpenCV (BGR) görselini PIL Image (RGB) formatına
+        # çevirme süresi. Genelde ihmal edilebilir küçüklükte ama
+        # tutarlılık için ayrı ölçülüyor.
+        "pil_conversion_time_seconds": pil_conversion_time,
         "execution_time_seconds": execution_time,
+        # total_time_seconds: görsel okuma + preprocessing + PIL dönüşümü +
+        # OCR motorunun kendisi. load_time_seconds (model yükleme) DAHIL
+        # DEĞİL — o, motor için bir kez ödenen, main.py'de paylaşılan bir
+        # maliyet.
+        "total_time_seconds": total_time,
+        "avg_confidence": avg_confidence,
         "model_used": model_name,
-        "settings_used": valid_generate_kwargs,  # Hangi generate parametreleriyle çalıştığını görmek için
+        # "eski donanım" senaryonuzda süre rakamlarının hangi donanımda
+        # ölçüldüğünü bilmek kritik (diğer motorlardaki ile aynı gerekçe).
+        "device_used": device,
+        "settings_used": valid_generate_kwargs,
+        "preprocessing_used": preprocessing_settings,
     }
 
 
@@ -174,3 +257,17 @@ if __name__ == "__main__":
         config_path="configurations/trocr/model_v1.yaml",
     )
     print(result)
+
+    # --- ÖNEMLİ: main.py entegrasyonu için ---
+    # EasyOCR/doctr'daki ile AYNI sorun burada da var, hatta daha ciddi:
+    # TrOCR'ın transformer modeli genelde EasyOCR/doctr'dan da AĞIR. main.py
+    # her görsel için run_trocr(img, config) çağırırken processor/model
+    # parametrelerini hiç vermiyorsa, ikisi de HER GÖRSEL İÇİN YENİDEN
+    # YÜKLENİR. main.py güncellemesinde processor+model'i BİR KEZ kurup
+    # tüm görseller için paylaşmamız gerekiyor:
+    #
+    #   from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+    #   shared_processor = TrOCRProcessor.from_pretrained("microsoft/trocr-base-handwritten")
+    #   shared_model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-base-handwritten")
+    #   for img_path in tüm_görseller:
+    #       result = run_trocr(img_path, config_path, processor=shared_processor, model=shared_model)

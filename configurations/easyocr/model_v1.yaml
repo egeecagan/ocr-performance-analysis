@@ -14,8 +14,6 @@
 #   _common.preprocess_image() fonksiyonunu kullanır.
 # =============================================================================
 
-model_name: "easyocr_v1"
-
 reader_settings:
   languages: ["tr", "en"]
   gpu: "auto"               # "auto": GPU varsa otomatik kullan | true/false: zorla aç/kapa

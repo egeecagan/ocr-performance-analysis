@@ -6,7 +6,7 @@ import pytesseract
 from pytesseract import Output
 from PIL import Image, ImageDraw, ImageFont
 
-from runners._common import load_config, resolve_font_path, preprocess_image, get_viz_dirs
+from runners._common import load_config, resolve_font_path, preprocess_image, get_viz_dirs, save_preprocessed_image
 
 
 def build_tesseract_config(ocr_settings):
@@ -49,7 +49,10 @@ def run_tesseract(image_path, config_path):
     font_path_config = ocr_settings.get("font_path")  # opsiyonel, extra_params'a da eklenebilir
     tess_config = build_tesseract_config(ocr_settings)
 
+    # --- image_load_time_seconds: görseli diskten okuma süresi ---
+    image_load_start = time.time()
     img = cv2.imread(image_path)
+    image_load_time = round(time.time() - image_load_start, 4)
 
     if img is None:
         # cv2.imread, dosya bulunamadığında veya bozuk/okunamaz olduğunda
@@ -69,9 +72,15 @@ def run_tesseract(image_path, config_path):
     # sabit 0.0 olarak ekleniyor.
     load_time = 0.0
 
-    # Preprocessing artık ortak _common.preprocess_image() üzerinden çalışır.
-    # Config'te kapalıysa img ham haliyle döner, davranış değişmez.
+    # --- preprocessing_time_seconds: preprocess_image() ne kadar sürdü ---
+    # Önceden bu süre HİÇ ölçülmüyordu — preprocessing config'ten açılıp
+    # kapatıldığında gerçek dünyada (örn. eski/yavaş bir bilgisayarda)
+    # kullanıcının ek olarak ne kadar beklediği tamamen kayıptı. Artık ayrı
+    # bir alan olarak ölçülüp raporlanıyor; execution_time_seconds (OCR
+    # motorunun kendisi) bundan ETKİLENMİYOR, ayrı tutuluyor.
+    preprocessing_start = time.time()
     ocr_input = preprocess_image(img, preprocessing_settings)
+    preprocessing_time = round(time.time() - preprocessing_start, 4)
 
     start_time = time.time()  # Süre BURADA başlar — preprocessing süreye dahil
     # DEĞİL, çünkü ölçmek istediğimiz "OCR motorunun kendisi ne kadar sürdü"
@@ -82,7 +91,11 @@ def run_tesseract(image_path, config_path):
     execution_time = round(time.time() - start_time, 4)  # Süre BURADA donar
 
     # --- Buradan sonrası süreye dahil değil: görselleştirme/raporlama ---
-    highlighted_dir, masked_dir = get_viz_dirs(config_path)
+    highlighted_dir, masked_dir, preprocessed_dir = get_viz_dirs(config_path)
+
+    # OCR motoruna giden görseli (preprocessing kapalıysa ham hali) her
+    # zaman kaydediyoruz — "motora ne gitti" her çağrıda görünür olsun.
+    save_preprocessed_image(ocr_input, preprocessed_dir, os.path.basename(image_path))
 
     # Highlight/mask çizimleri orijinal RENKLİ görsel üzerine yapılır —
     # preprocessing sadece OCR motoruna giden girdiyi etkiler, görselleştirme
@@ -130,10 +143,20 @@ def run_tesseract(image_path, config_path):
     masked_final = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
     cv2.imwrite(os.path.join(masked_dir, f"masked_{img_name}"), masked_final)
 
+    total_time = round(image_load_time + preprocessing_time + execution_time, 4)
+
     return {
         "text": " ".join(recognized_words),
         "load_time_seconds": load_time,
+        "image_load_time_seconds": image_load_time,
+        "preprocessing_time_seconds": preprocessing_time,
         "execution_time_seconds": execution_time,
+        # total_time_seconds: gerçek dünyada kullanıcının uçtan uca beklediği
+        # süre — görsel okuma + preprocessing + OCR motorunun kendisi.
+        # (load_time_seconds dahil DEĞİL: o, motor için BİR KEZ ödenen ve
+        # main.py'de tüm görseller arasında paylaşılan bir maliyet; tek bir
+        # görselin "bu görsel için ne kadar bekledim" sorusuna karışmamalı.)
+        "total_time_seconds": total_time,
         "avg_confidence": avg_confidence,
         # Hangi dil ayarıyla çalıştığı artık model_used'da görünüyor.
         "model_used": f"tesseract-{lang}",

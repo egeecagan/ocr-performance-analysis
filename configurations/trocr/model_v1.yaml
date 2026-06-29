@@ -1,62 +1,64 @@
 # =============================================================================
 # TrOCR Config
 # =============================================================================
-# - ocr_settings: model/font ile ilgili temel ayarlar.
-# - generate_settings: model.generate(...)'e geçirilen TÜM parametreler.
+# ocr_settings: model/processor oluşturmak için ayarlar.
+#   model_name değiştiğinde modelin YENİDEN yüklenmesi gerekir —
+#   load_time_seconds bu yüzden gerçek bir maliyet olarak ölçülür.
 #
-# ÖNEMLİ NOT: model.generate(**kwargs) Hugging Face'te serbest **kwargs kabul
-# ediyor (generation_config üzerinden de çalışabiliyor). Bu yüzden EasyOCR'daki
-# gibi "yazım hatası sessizce elenir" garantisi BURADA YOK — generate() her
-# anahtarı kabul eder, geçersiz bir parametre yazarsan çalışma anında hata
-# alabilirsin. Parametre adlarını yazarken dikkatli ol.
+#   gpu: "auto" (varsayılan) -> GPU varsa otomatik kullanılır.
+#        true/false yazarsanız zorlama olarak kullanılır.
 #
-# Bazı parametreler BİRLİKTE çalışmak zorunda:
-#   - temperature, top_k, top_p  -> etkili olmaları için do_sample: true olmalı.
-#     do_sample: false (varsayılan) ise bu üçü sessizce YOK SAYILIR.
-#   - num_beams > 1 ise beam search aktif olur; do_sample ile birlikte
-#     kullanılabilir (beam search + sampling).
+# generate_settings: model.generate() çağrısına geçirilen serbest
+#   parametreler (örn. max_length, num_beams). filter_valid_kwargs()
+#   generate **kwargs kabul ettiği için pratikte hepsini geçirir.
 #
-# Tam parametre listesi:
-#   https://huggingface.co/docs/transformers/main_classes/text_generation
+# preprocessing: diğer 3 motor config'iyle BİREBİR aynı şema, aynı ortak
+#   _common.preprocess_image() fonksiyonunu kullanır.
+#
+# NOT: TrOCR tek satırlık metin için tasarlanmış bir modeldir. Ehliyet/
+# dekont gibi çok bölgeli, karmaşık layout'lu belgelerde performansı
+# preprocessing'den bağımsız olarak sınırlı olabilir — bu farklı bir konu,
+# preprocessing ile çözülmez.
 # =============================================================================
 
 model_name: "trocr_v1"
 
 ocr_settings:
-  model_name: "microsoft/trocr-base-handwritten"  # veya "microsoft/trocr-base-printed" vs.
-
-  # --- Masked görsel için font ayarları ---
+  model_name: "microsoft/trocr-base-handwritten"
+  gpu: "auto"
+  font_path: null          # opsiyonel, masked görselde kullanılacak font
   font_size: 24
-  # font_path: "/path/to/custom_font.ttf"  # Elle belirtmek istersen; boşsa OS'a göre otomatik seçilir
 
 generate_settings:
-  # ---------------------------------------------------------------------
-  # Uzunluk kontrolü
-  # ---------------------------------------------------------------------
-  max_new_tokens: 64          # Üretilecek maksimum token sayısı (uzun metinlerde artır)
-  # min_new_tokens: 1          # Üretilecek minimum token sayısı
+  max_length: 64            # üretilecek maksimum token sayısı
+  num_beams: 1               # 1: greedy (hızlı) | >1: beam search (daha doğru, daha yavaş)
 
-  # ---------------------------------------------------------------------
-  # Beam search (deterministik, daha kaliteli ama daha yavaş)
-  # ---------------------------------------------------------------------
-  num_beams: 1                 # 1 = beam search kapalı (greedy). Artırmak doğruluğu artırabilir, yavaşlatır.
-  early_stopping: false        # num_beams kadar tamamlanmış aday bulununca dursun mu
+preprocessing:
+  resize: false
+  resize_scale: 2.0
 
-  # ---------------------------------------------------------------------
-  # Sampling (rastgelelik) — ETKİLİ OLMASI İÇİN do_sample: true OLMALI
-  # ---------------------------------------------------------------------
-  do_sample: false              # true yaparsan temperature/top_k/top_p devreye girer
-  # temperature: 1.0             # < 1 daha "kararlı", > 1 daha "yaratıcı/rastgele" çıktı
-  # top_k: 50
-  # top_p: 1.0
+  deskew: false
 
-  # ---------------------------------------------------------------------
-  # Tekrarı önleme
-  # ---------------------------------------------------------------------
-  repetition_penalty: 1.0       # 1.0 = ceza yok. >1.0 tekrar eden tokenleri cezalandırır.
-  # no_repeat_ngram_size: 0      # > 0 ise bu boyuttaki ngram'lar bir kez geçebilir
+  autocrop_border: false
+  autocrop_margin_ratio: 0.01
 
-  # ---------------------------------------------------------------------
-  # Buraya yeni parametre eklemek için örnek satır
-  # ---------------------------------------------------------------------
-  # length_penalty: 1.0
+  illumination_correct: false
+  illumination_kernel_size: 51
+
+  grayscale: false
+
+  clahe: false
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+
+  denoise: false
+
+  sharpen: false
+
+  morphology: false
+  morphology_op: "dilate"
+  morphology_kernel_size: 2
+
+  threshold: false
+  threshold_block_size: 35
+  threshold_c: 11

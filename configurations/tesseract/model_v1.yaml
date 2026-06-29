@@ -122,7 +122,7 @@ preprocessing:
   illumination_correct: false      # true yaparsan gölge/aydınlatma farkı düzeltilir
   illumination_kernel_size: 51
 
-  grayscale: false                 # true yaparsan renkli -> gri tonlama
+  grayscale: true                 # true yaparsan renkli -> gri tonlama
 
   clahe: false                     # true yaparsan bölgesel kontrast artırma (CLAHE)
   clahe_clip_limit: 2.0

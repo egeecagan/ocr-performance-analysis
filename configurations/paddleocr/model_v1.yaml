@@ -1,0 +1,64 @@
+# =============================================================================
+# PaddleOCR Config
+# =============================================================================
+# ocr_settings.lang: RapidOCR'daki "lang_type" ile aynı mantık ama farklı
+#   isim — PaddleOCR'da parametre adı "lang". PP-OCRv6'nın birleşik modeli
+#   Türkçe'yi Latin grubu içinde doğrudan destekliyor ("tr" kodu).
+#
+# use_doc_orientation_classify / use_doc_unwarping / use_textline_orientation:
+#   PaddleOCR'ın KENDİ İÇİNDE yapabileceği ek ön-işleme adımları (belge
+#   yönünü düzeltme, kıvrımı düzleştirme, satır yönünü düzeltme). Burada
+#   KASITLI OLARAK KAPALI tutuluyor — kendi preprocess_image()
+#   pipeline'ımızla çakışmasın, 6 motor arasındaki kıyas adil kalsın.
+#   İsterseniz açıp PaddleOCR'ın kendi önişlemesinin etkisini de test
+#   edebilirsiniz, ama bu durumda sonuçların "saf model" performansını
+#   yansıtmadığını unutmayın.
+#
+# ÖNEMLİ UYARI: PaddleOCR'ın model dosyaları RapidOCR'daki gibi pakete
+#   gömülü DEĞİLDİR — ilk kullanımda İNTERNETTEN indirilir (HuggingFace,
+#   ModelScope, AIStudio veya Baidu BOS üzerinden). Offline/kapalı bir ağda
+#   ilk çalıştırma BAŞARISIZ OLUR. "Eski donanım, hızlı/basit kurulum"
+#   senaryonuzda bu, RapidOCR'a kıyasla somut bir dezavantaj.
+#
+# preprocessing: diğer 5 motor config'iyle BİREBİR aynı şema, aynı ortak
+#   _common.preprocess_image() fonksiyonunu kullanır.
+# =============================================================================
+
+model_name: "paddleocr_v1"
+
+ocr_settings:
+  lang: "tr"                              # PP-OCRv6 dil kodu: "tr" | "en" | "ch" | ...
+  font_path: null                          # opsiyonel, masked görselde kullanılacak font
+  use_doc_orientation_classify: false      # PaddleOCR'ın kendi belge-yönü düzeltmesi
+  use_doc_unwarping: false                 # PaddleOCR'ın kendi kıvrım düzeltmesi
+  use_textline_orientation: false          # PaddleOCR'ın kendi satır-yönü düzeltmesi
+
+preprocessing:
+  resize: false
+  resize_scale: 2.0
+
+  deskew: false
+
+  autocrop_border: false
+  autocrop_margin_ratio: 0.01
+
+  illumination_correct: false
+  illumination_kernel_size: 51
+
+  grayscale: false
+
+  clahe: false
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+
+  denoise: false
+
+  sharpen: false
+
+  morphology: false
+  morphology_op: "dilate"
+  morphology_kernel_size: 2
+
+  threshold: false
+  threshold_block_size: 35
+  threshold_c: 11

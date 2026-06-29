@@ -352,18 +352,40 @@ def preprocess_image(img, preprocessing_settings):
     return processed
 
 
+def save_preprocessed_image(ocr_input, preprocessed_dir, img_name):
+    """
+    OCR motoruna verilmeden önceki (preprocess_image() sonrası) görseli
+    diske kaydeder. Preprocessing kapalıysa bu, görselin ham/orijinal hali
+    olur — her durumda "motora ne gitti" diske yazılır.
+
+    cv2.imwrite tek kanallı (gri/binary) ve 3 kanallı (BGR) görselleri
+    sorunsuz kaydeder, bu yüzden burada ekstra bir dönüşüm gerekmiyor —
+    fonksiyon sadece dosya adı/yol mantığını tek yerde tutmak için var,
+    4 runner'da aynı isimlendirme kuralını (prefix "preprocessed_") garantiler.
+    """
+    out_path = os.path.join(preprocessed_dir, f"preprocessed_{img_name}")
+    cv2.imwrite(out_path, ocr_input)
+    return out_path
+
+
 def get_viz_dirs(config_path, base_output_dir="outputs"):
     """
     config_path'ten (örn. configurations/tesseract/model_v1.yaml) viz
     klasörlerini türetir ve oluşturur:
         outputs/{engine}/{model_name}/viz/highlighted
         outputs/{engine}/{model_name}/viz/masked
+        outputs/{engine}/{model_name}/viz/preprocessed
 
     main.py'deki process_pipeline(engine, model_name) ile birebir aynı klasör
     yapısına yazılır; farklı model_v1/model_v2 viz çıktıları birbirinin
     üstüne yazmaz.
 
-    Döndürür: (highlighted_dir, masked_dir)
+    preprocessed_dir: OCR motoruna verilmeden önce (preprocess_image()
+    sonrası) görselin kendisi buraya kaydedilir — preprocessing kapalı
+    olsa bile (o zaman görsel hâliyle/ham olarak) kaydedilir, böylece her
+    görsel için "motora ne gitti" her zaman görülebilir.
+
+    Döndürür: (highlighted_dir, masked_dir, preprocessed_dir)
     """
     from pathlib import Path
 
@@ -374,8 +396,10 @@ def get_viz_dirs(config_path, base_output_dir="outputs"):
     viz_dir = os.path.join(base_output_dir, engine, model_name, "viz")
     highlighted_dir = os.path.join(viz_dir, "highlighted")
     masked_dir = os.path.join(viz_dir, "masked")
+    preprocessed_dir = os.path.join(viz_dir, "preprocessed")
 
     os.makedirs(highlighted_dir, exist_ok=True)
     os.makedirs(masked_dir, exist_ok=True)
+    os.makedirs(preprocessed_dir, exist_ok=True)
 
-    return highlighted_dir, masked_dir
+    return highlighted_dir, masked_dir, preprocessed_dir

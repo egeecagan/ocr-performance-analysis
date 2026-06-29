@@ -12,6 +12,7 @@ from runners._common import (
     filter_valid_kwargs,
     preprocess_image,
     get_viz_dirs,
+    save_preprocessed_image,
 )
 
 
@@ -64,7 +65,10 @@ def run_easyocr(image_path, config_path, reader=None):
         # yükleme maliyeti yok.
         load_time = 0.0
 
+    # --- image_load_time_seconds: görseli diskten okuma süresi ---
+    image_load_start = time.time()
     img = cv2.imread(image_path)
+    image_load_time = round(time.time() - image_load_start, 4)
 
     if img is None:
         # cv2.imread bulunamayan/bozuk dosyada sessizce None döner; burada
@@ -75,9 +79,12 @@ def run_easyocr(image_path, config_path, reader=None):
             f"yol hatalı olabilir): {image_path}"
         )
 
-    # Preprocessing artık ortak _common.preprocess_image() üzerinden çalışır.
-    # Config'te kapalıysa img ham haliyle döner, davranış değişmez.
+    # --- preprocessing_time_seconds ---
+    # Önceden bu süre HİÇ ölçülmüyordu. execution_time_seconds (OCR
+    # motorunun kendisi) bundan ETKİLENMİYOR, ayrı tutuluyor.
+    preprocessing_start = time.time()
     ocr_input = preprocess_image(img, preprocessing_settings)
+    preprocessing_time = round(time.time() - preprocessing_start, 4)
 
     # --- Kanal güvenliği ---
     # preprocess_image bazı adımlardan sonra (grayscale, threshold, clahe,
@@ -105,7 +112,11 @@ def run_easyocr(image_path, config_path, reader=None):
     execution_time = round(time.time() - start_time, 4)  # Süre BURADA donar
 
     # --- Buradan sonrası süreye dahil değil: görselleştirme/raporlama ---
-    highlighted_dir, masked_dir = get_viz_dirs(config_path)
+    highlighted_dir, masked_dir, preprocessed_dir = get_viz_dirs(config_path)
+
+    # OCR motoruna giden görseli (preprocessing kapalıysa ham hali, kanal
+    # güvenliği sonrası 3 kanallı hali) her zaman kaydediyoruz.
+    save_preprocessed_image(ocr_input, preprocessed_dir, os.path.basename(image_path))
 
     # Highlight/mask çizimleri orijinal RENKLİ görsel üzerine yapılır —
     # preprocessing sadece OCR motoruna giden girdiyi etkiler.
@@ -201,10 +212,18 @@ def run_easyocr(image_path, config_path, reader=None):
     masked_final = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
     cv2.imwrite(os.path.join(masked_dir, f"masked_{img_name}"), masked_final)
 
+    total_time = round(image_load_time + preprocessing_time + execution_time, 4)
+
     return {
         "text": recognized_text,
         "load_time_seconds": load_time,
+        "image_load_time_seconds": image_load_time,
+        "preprocessing_time_seconds": preprocessing_time,
         "execution_time_seconds": execution_time,
+        # total_time_seconds: görsel okuma + preprocessing + OCR motorunun
+        # kendisi. load_time_seconds (model yükleme) DAHIL DEĞİL — o, motor
+        # için bir kez ödenen, main.py'de paylaşılan bir maliyet.
+        "total_time_seconds": total_time,
         "avg_confidence": avg_confidence,
         # Hangi dillerle çalıştığı artık model_used'da görünüyor, örn.
         # "easyocr-tr+en" — Tesseract'taki model_used formatıyla tutarlı.

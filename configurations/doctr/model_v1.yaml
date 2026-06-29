@@ -1,16 +1,55 @@
 # =============================================================================
-# DocTR Config
+# doctr OCR Config
 # =============================================================================
-# model_settings altındaki ayarlar ocr_predictor(...) çağrısına geçiriliyor.
+# model_settings: ocr_predictor(...) oluşturmak için kullanılan ayarlar.
+#   det_arch/reco_arch değiştiğinde modelin YENİDEN yüklenmesi gerekir —
+#   load_time_seconds bu yüzden gerçek bir maliyet olarak ölçülür.
 #
-# Desteklenen mimariler için (değişebilir, güncel liste için doctr dokümantasyonuna bak):
-#   det_arch:  "db_resnet50" | "db_resnet34" | "db_mobilenet_v3_large" | "linknet_resnet18" ...
-#   reco_arch: "crnn_vgg16_bn" | "crnn_mobilenet_v3_small" | "master" | "sar_resnet31" | "parseq" ...
+#   gpu: "auto" (varsayılan) -> GPU varsa otomatik kullanılır.
+#        true/false yazarsanız zorlama olarak kullanılır.
+#
+# preprocessing: Tesseract/EasyOCR config'leriyle BİREBİR aynı şema, aynı
+#   ortak _common.preprocess_image() fonksiyonunu kullanır.
 # =============================================================================
 
 model_name: "doctr_v1"
 
 model_settings:
-  det_arch: "db_resnet50"        # Metin tespit (detection) mimarisi
-  reco_arch: "crnn_vgg16_bn"     # Metin tanıma (recognition) mimarisi
-  pretrained: true                # Önceden eğitilmiş ağırlıkları kullan
+  det_arch: "db_resnet50"
+  reco_arch: "crnn_vgg16_bn"
+  pretrained: true        # !!! false yaparsan EĞİTİLMEMİŞ/rastgele model kurulur,
+                            # OCR karşılaştırması için ANLAMSIZ sonuç verir.
+                            # Sadece kendi verinizle sıfırdan eğitim yapacaksanız
+                            # false kullanın. Yanlışlıkla false bırakılırsa kod
+                            # konsola uyarı basar ama çalışmayı durdurmaz.
+  gpu: "auto"
+
+preprocessing:
+  resize: false
+  resize_scale: 2.0
+
+  deskew: false
+
+  autocrop_border: false
+  autocrop_margin_ratio: 0.01
+
+  illumination_correct: false
+  illumination_kernel_size: 51
+
+  grayscale: false
+
+  clahe: false
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+
+  denoise: false
+
+  sharpen: false
+
+  morphology: false
+  morphology_op: "dilate"
+  morphology_kernel_size: 2
+
+  threshold: false
+  threshold_block_size: 35
+  threshold_c: 11
