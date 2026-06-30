@@ -12,14 +12,16 @@ from runners._common import (
     preprocess_image,
     get_viz_dirs,
     save_preprocessed_image,
+    filter_valid_kwargs,
 )
 
 
 def build_rapidocr_params(settings):
     """
-    Config'teki model_selection bloğundan, RapidOCR(params=...) için
-    gereken sözlüğü üretir.
+    Config'teki model_selection ve advanced_settings bloklarından,
+    RapidOCR(params=...) için gereken sözlüğü üretir.
 
+    === model_selection (Det/Cls/Rec mimari seçimi) ===
     Det/Cls/Rec için BAĞIMSIZ olarak ayarlanabilir:
       - model_type: "tiny" | "small" | "mobile" | "medium" | "server"
         (hangi boyutların geçerli olduğu modüle göre değişir — örn. Cls
@@ -30,12 +32,29 @@ def build_rapidocr_params(settings):
         PP-OCRv6 modelleri dışında, kendi eğittiğiniz veya farklı bir
         kaynaktan indirdiğiniz modelleri kullanmanızı sağlar.
 
-    Hiçbir model_selection ayarı verilmezse, RapidOCR'ın kendi
-    varsayılanları (Det/Rec: small, Cls: mobile) kullanılır — davranış
-    önceki haliyle birebir aynı kalır.
+    === advanced_settings (eşik/limit ayarları, Global + Det/Cls/Rec) ===
+    RapidOCR'ın OCR davranışını (tespit hassasiyeti, kabul eşikleri,
+    görsel boyut limitleri) etkileyen sayısal parametreler. Bu blokta
+    YAZDIĞINIZ HER ANAHTAR doğrudan "Modül.anahtar" formatında params'a
+    eklenir (örn. advanced_settings.Det.box_thresh -> "Det.box_thresh").
+    Hangi anahtarların geçerli olduğu RapidOCR'ın kendi config şemasına
+    bağlıdır — yazım hatası içeren bir anahtar RapidOCR tarafından
+    sessizce yok sayılabilir ya da hataya yol açabilir, RapidOCR sürümüne
+    göre değişir. Yaygın/pratik olanlar configurations/rapidocr/
+    model_full_reference.yaml dosyasında örneklenmiştir.
+
+    Not: EngineConfig (ONNX Runtime/OpenVINO/Paddle/Torch/TensorRT thread
+    ve GPU ayarları) BİLEREK bu fonksiyonun kapsamı dışında tutulmuştur —
+    bu proje sadece varsayılan ONNX Runtime backend'ini kullanıyor, diğer
+    4 backend'in (ve TensorRT'nin GPU-shape profillerinin) konfigürasyonu
+    "eski donanım, CPU'da çalışacak basit kurulum" senaryonuzla ilgisizdir.
+
+    Hiçbir ayar verilmezse, RapidOCR'ın kendi varsayılanları kullanılır —
+    davranış önceki haliyle birebir aynı kalır.
     """
     params = {}
     model_selection = settings.get("model_selection", {}) or {}
+    advanced_settings = settings.get("advanced_settings", {}) or {}
 
     for module in ("Det", "Cls", "Rec"):
         module_settings = model_selection.get(module, {}) or {}
@@ -57,6 +76,19 @@ def build_rapidocr_params(settings):
             # yutup varsayılana dönmek yanıltıcı olurdu.
             params[f"{module}.model_type"] = ModelType[model_type_str.upper()]
 
+        # advanced_settings'teki bu modüle ait her anahtar, "Modül.anahtar"
+        # formatında doğrudan ekleniyor (örn. Det.box_thresh, Det.thresh,
+        # Rec.rec_batch_num, Cls.cls_thresh).
+        module_advanced = advanced_settings.get(module, {}) or {}
+        for key, value in module_advanced.items():
+            params[f"{module}.{key}"] = value
+
+    # Global ayarlar (text_score, min_height, max_side_len, vb.) — modüle
+    # özel değil, "Global.anahtar" formatında eklenir.
+    global_advanced = advanced_settings.get("Global", {}) or {}
+    for key, value in global_advanced.items():
+        params[f"Global.{key}"] = value
+
     return params
 
 
@@ -64,6 +96,12 @@ def run_rapidocr(image_path, config_path, engine=None):
     config = load_config(config_path)
     settings = config.get("ocr_settings", {})
     preprocessing_settings = config.get("preprocessing", {}) or {}
+
+    # call_settings: RapidOCR.__call__()'ın (her görsel çağrısında) kabul
+    # ettiği parametreler — EasyOCR'daki readtext_settings'in karşılığı.
+    # Config'te kapalıysa boş kalır, RapidOCR kendi varsayılanlarını
+    # kullanır (önceki davranışla birebir aynı).
+    call_settings = config.get("call_settings", {}) or {}
 
     # RapidOCR'da dil parametresi Tesseract'tan ("tur+eng") FARKLI bir
     # formatta: tek bir lang_type kodu (örn. "tr", "en", "ch"). PP-OCRv6
@@ -142,7 +180,15 @@ def run_rapidocr(image_path, config_path, engine=None):
     # KULLANILMIYOR — kendi iç ölçümü preprocessing/I-O sınırlarımızla
     # birebir örtüşmeyebilir, bu yüzden diğer motorlardaki gibi kendi
     # time.time() ölçümümüzü yapıyoruz, tutarlılık için.
-    result = engine(ocr_input)
+    # Config'teki TÜM call_settings anahtarlarını, RapidOCR.__call__'ın
+    # GERÇEKTEN kabul ettiği parametrelerle filtreleyip otomatik geçiriyoruz
+    # — EasyOCR'ın readtext_settings'inde kullandığımız aynı mekanizma. Bu
+    # sayede use_det, use_cls, use_rec, return_word_box,
+    # return_single_char_box, text_score, box_thresh, unclip_ratio gibi
+    # __call__'ın desteklediği HER parametre, config'e eklemeniz yeterli
+    # olacak şekilde otomatik çalışır — kod değişikliği gerekmez.
+    valid_call_kwargs = filter_valid_kwargs(engine.__call__, call_settings)
+    result = engine(ocr_input, **valid_call_kwargs)
 
     execution_time = round(time.time() - start_time, 4)  # Süre BURADA donar
 
@@ -220,7 +266,12 @@ def run_rapidocr(image_path, config_path, engine=None):
         # ve şu an config'te ayrı bir ayar olarak sunulmuyor — bu yüzden
         # diğer motorlardaki gibi "auto" tespiti yok, sabit "cpu".
         "device_used": "cpu",
-        "settings_used": {"lang_type": lang_type, "model_selection": settings.get("model_selection", {})},
+        "settings_used": {
+            "lang_type": lang_type,
+            "model_selection": settings.get("model_selection", {}),
+            "advanced_settings": settings.get("advanced_settings", {}),
+            "call_settings_used": valid_call_kwargs,
+        },
         "preprocessing_used": preprocessing_settings,
     }
 

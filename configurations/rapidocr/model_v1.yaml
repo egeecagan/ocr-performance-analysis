@@ -1,62 +1,184 @@
 # =============================================================================
-# RapidOCR Config
+# RapidOCR — FULL Base Config (reference / example)
 # =============================================================================
-# ocr_settings.lang_type: RapidOCR'da dil parametresi Tesseract'tan FARKLI
-#   bir formattadır — Tesseract "tur+eng" gibi birleşik kodlar kullanırken,
-#   RapidOCR (PP-OCRv6 modeliyle) TEK BİR dil kodu bekler: "tr", "en", "ch"
-#   gibi. "latin" diye genel bir kategori PP-OCRv6'da YOK — Türkçe için
-#   doğrudan "tr" kodu kullanılır (PP-OCRv6, Türkçe'yi ayrı bir dil olarak
-#   destekliyor, 50'den fazla dil arasında).
+# RapidOCR exposes its behavior through THREE distinct layers, each
+# handled differently in run_rapidocr.py:
 #
-#   NOT: RapidOCR'ın Türkçe karakter desteği (ş, ğ, ı, ö, ü, ç) Tesseract/
-#   EasyOCR'dan farklı bir sözlük/eğitim verisi kullanıyor — raporunuzda
-#   bu üçünü gerçek Türkçe karakterli görsellerle ayrıca kıyaslamanız
-#   faydalı olur.
+#   1. model_selection — WHICH model files to load (Det/Cls/Rec, each can
+#      pick model_type or a custom model_path). Consumed ONCE, when the
+#      engine is constructed.
+#   2. advanced_settings — HOW those models behave (thresholds, size
+#      limits). Also consumed ONCE, at construction time, via the same
+#      RapidOCR(params={...}) mechanism as model_selection.
+#   3. call_settings — runtime flags passed to engine(image, ...) on
+#      EVERY image (e.g. turning detection/classification/recognition on
+#      or off for a single call). This is the equivalent of EasyOCR's
+#      readtext_settings.
 #
-# ocr_settings.model_selection: Det (detection), Cls (yön sınıflandırma),
-#   Rec (recognition) modüllerinin HANGİ BOYUTTA çalışacağını bağımsız
-#   olarak kontrol eder. Her modül için ikisinden BİRİNİ kullanın:
-#
-#   1. model_type: "tiny" | "small" | "mobile" | "medium" | "server"
-#      Hangi boyutların geçerli olduğu modüle göre değişir:
-#        - Det:  tiny / small / mobile / medium / server
-#        - Cls:  sadece mobile (RapidOCR'da Cls için tek boyut var)
-#        - Rec:  tiny / small / medium
-#      Genel eğilim: tiny en hafif/hızlı/az doğru, server en ağır/yavaş/
-#      en doğru. "small" RapidOCR'ın kendi varsayılanı ve pakete gömülü
-#      geliyor (ek indirme gerektirmez). "tiny" ve "medium" ilk kullanımda
-#      İNTERNETTEN inecek.
-#
-#   2. model_path: Kendi/özel bir .onnx model dosyanızın TAM YOLU.
-#      Verilirse model_type YOK SAYILIR — resmi PP-OCRv6 modelleri dışında
-#      kendi eğittiğiniz veya başka bir kaynaktan indirdiğiniz modeli
-#      kullanmanızı sağlar.
-#
-#   Hiçbir model_selection ayarı yoksa RapidOCR'ın kendi varsayılanları
-#   kullanılır (Det/Rec: small, Cls: mobile) — bu da `model_v1` (bu
-#   dosya) için seçilen davranış.
-#
-# preprocessing: diğer motorların config'leriyle BİREBİR aynı şema, aynı
-#   ortak _common.preprocess_image() fonksiyonunu kullanır.
+# NOTE: EngineConfig (ONNX Runtime/OpenVINO/Paddle/Torch/TensorRT thread
+# and GPU settings) is intentionally NOT covered here — this project only
+# uses the default ONNX Runtime CPU backend, and the other four backends'
+# settings (TensorRT GPU shape profiles, NPU memory limits, etc.) are
+# irrelevant to a "runs on old/low-spec hardware" setup. If you need
+# thread-count tuning for ONNX Runtime specifically, ask for it to be
+# added — it's a small, practical addition (EngineConfig.onnxruntime.
+# intra_op_num_threads / inter_op_num_threads).
 # =============================================================================
+
+model_name: "rapidocr_full_reference"
 
 ocr_settings:
-  lang_type: "tr"           # PP-OCRv6 dil kodu: "tr" | "en" | "ch" | ...
-  font_path: null            # opsiyonel, masked görselde kullanılacak font
+  lang_type: "tr"
+  # PP-OCRv6 language code: "tr" | "en" | "ch" | ... (see RapidOCR's docs
+  # for the full list — Turkish is supported directly as "tr", not via a
+  # generic "latin" category).
 
-  # Bu blok TAMAMEN opsiyonel. Boş/yorum satırı bırakılırsa RapidOCR'ın
-  # kendi varsayılanları (small/mobile) kullanılır.
+  font_path: null
+  # Optional, used by resolve_font_path() for the masked visualization.
+
+  # ---------------------------------------------------------------------
+  # model_selection — which Det/Cls/Rec model files to load
+  # ---------------------------------------------------------------------
   model_selection:
     Det:
-      model_type: "small"     # tiny | small | mobile | medium | server
-      # model_path: "/tam/yol/kendi_det_modelim.onnx"  # verilirse model_type yok sayılır
+      model_type: "small"
+      # tiny | small | mobile | medium | server
+      # model_path: "/full/path/to/your_det_model.onnx"  # overrides model_type if set
     Cls:
-      model_type: "mobile"    # RapidOCR'da Cls için şu an tek seçenek
-      # model_path: "/tam/yol/kendi_cls_modelim.onnx"
+      model_type: "mobile"
+      # RapidOCR currently only ships a "mobile" size for the
+      # classification (orientation) model.
+      # model_path: "/full/path/to/your_cls_model.onnx"
     Rec:
-      model_type: "small"     # tiny | small | medium
-      # model_path: "/tam/yol/kendi_rec_modelim.onnx"
+      model_type: "small"
+      # tiny | small | medium
+      # model_path: "/full/path/to/your_rec_model.onnx"
 
+  # ---------------------------------------------------------------------
+  # advanced_settings — threshold/limit tuning, consumed ONCE at
+  # construction time (same mechanism as model_selection). Any key you
+  # write here is passed straight through as "Module.key" to RapidOCR —
+  # only the PRACTICALLY USEFUL ones are listed below as a reference;
+  # add/remove freely.
+  # ---------------------------------------------------------------------
+  advanced_settings:
+    Global:
+      text_score: 0.5
+      # (default 0.5) Minimum overall confidence score for a result to be
+      # kept. Lower = more permissive (catches more text, more false
+      # positives); higher = stricter.
+
+      min_height: 30
+      # (default 30) Minimum image height (pixels) RapidOCR will process
+      # without upscaling internally.
+
+      width_height_ratio: 8
+      # (default 8) Used to decide whether an image looks like a single
+      # text line vs. a full document, affecting internal preprocessing.
+
+      max_side_len: 2000
+      # (default 2000) Images larger than this (on the longest side) are
+      # downscaled before detection — relevant for very high-resolution
+      # scans on low-spec hardware (smaller = faster, less memory, but
+      # may lose detail on small text).
+
+      min_side_len: 30
+      # (default 30) Images smaller than this are upscaled before detection.
+
+    Det:
+      thresh: 0.3
+      # (default 0.3) Pixel-level binarization threshold for the text
+      # detection heatmap — lower catches fainter text, but more noise.
+
+      box_thresh: 0.5
+      # (default 0.5) Confidence threshold for keeping a detected text
+      # box. Lower = more boxes kept (more recall, more false positives).
+
+      max_candidates: 1000
+      # (default 1000) Maximum number of text box candidates considered
+      # per image — relevant for very dense documents.
+
+      unclip_ratio: 1.6
+      # (default 1.6) How much to expand detected text boxes outward —
+      # higher values give more padding around text, useful if text is
+      # being clipped at the edges of boxes.
+
+      limit_side_len: 736
+      # (default 736) Detection model's internal resize target — larger
+      # values can improve accuracy on small text but cost more compute
+      # (relevant trade-off for "old hardware" scenarios).
+
+      limit_type: "min"
+      # (default "min") How limit_side_len is applied: resize so the
+      # shorter ("min") or longer ("max") side matches the limit.
+
+      use_dilation: true
+      # (default true) Apply morphological dilation to detected text
+      # regions — can help merge nearby characters into one box.
+
+    Cls:
+      cls_thresh: 0.9
+      # (default 0.9) Confidence threshold for accepting the
+      # orientation classification (0° vs 180°) result.
+
+      cls_batch_num: 6
+      # (default 6) Batch size for the classification step — larger is
+      # faster per-image throughput but uses more memory at once.
+
+    Rec:
+      rec_batch_num: 6
+      # (default 6) Batch size for the recognition step — same
+      # speed/memory trade-off as cls_batch_num.
+
+  # ---------------------------------------------------------------------
+  # call_settings — runtime flags passed to engine(image, ...) on EVERY
+  # image call (the equivalent of EasyOCR's readtext_settings). Filtered
+  # through filter_valid_kwargs against RapidOCR.__call__'s real
+  # signature, so any key it doesn't recognize is silently ignored.
+  # ---------------------------------------------------------------------
+
+# NOTE: call_settings lives at the TOP LEVEL of the file (same level as
+# preprocessing), NOT nested under ocr_settings — see below.
+
+call_settings:
+  use_det: true
+  # (default: model's own setting) Enable/disable the detection step for
+  # this call. Set false only if you already know the image is a single
+  # cropped text line (skips detection entirely, faster).
+
+  use_cls: true
+  # Enable/disable the orientation classification step for this call.
+
+  use_rec: true
+  # Enable/disable the recognition step for this call. Set false if you
+  # only want bounding boxes (text detection only, no character reading).
+
+  return_word_box: false
+  # (default false) Return per-WORD bounding boxes within each detected
+  # line, not just per-line boxes — useful if you need finer-grained
+  # positions (e.g. for a word-level confidence overlay tool).
+
+  return_single_char_box: false
+  # (default false) Return per-CHARACTER bounding boxes — even finer
+  # grained than return_word_box, at a higher computational cost.
+
+  text_score: 0.5
+  # Same meaning as advanced_settings.Global.text_score above, but
+  # overridable PER CALL without rebuilding the engine.
+
+  box_thresh: 0.5
+  # Same meaning as advanced_settings.Det.box_thresh above, but
+  # overridable per call.
+
+  unclip_ratio: 1.6
+  # Same meaning as advanced_settings.Det.unclip_ratio above, but
+  # overridable per call.
+
+# =============================================================================
+# preprocessing — shared schema across all 6 engines (see _common.py)
+# All steps default to false/disabled — enabling preprocessing here does
+# NOT guarantee improved accuracy, it should be measured against real data.
+# =============================================================================
 preprocessing:
   resize: false
   resize_scale: 2.0

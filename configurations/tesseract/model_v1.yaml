@@ -1,141 +1,161 @@
 # =============================================================================
-# Tesseract OCR Config
+# Tesseract — FULL Base Config (reference / example)
 # =============================================================================
-# Bu dosyaya yeni bir parametre eklediğinde kodu DEĞİŞTİRMEN gerekmiyor.
+# Tesseract works DIFFERENTLY from the other engines in this project: it
+# has no Python-level parameter list to introspect (unlike EasyOCR's
+# Reader.__init__ or doctr's ocr_predictor()). Instead, Tesseract exposes
+# its behavior through:
+#   1. A handful of CLI flags (--psm, --oem, --dpi, -l) handled by
+#      build_tesseract_config() in run_tesseract.py.
+#   2. Hundreds of internal "config variables" set via `-c VAR=VALUE`
+#      (see `tesseract --print-parameters` — 629 of them in this install).
+#      These ALREADY work without any code change: anything you put under
+#      extra_params below is passed straight through.
+#   3. A few Python-only parameters on pytesseract.image_to_data() itself
+#      (timeout, nice) that are NOT Tesseract config variables.
 #
-# - lang / psm / oem: en sık değiştirilen, Tesseract'ın kendi bayrakları
-#   (--psm, --oem, -l). Bunlar build_tesseract_config() içinde özel olarak
-#   işleniyor çünkü Tesseract CLI'da "-c" değil, kendi başlarına bayraklar.
-#
-# - extra_params: Tesseract'ın "config variable" dediği, "-c key=value"
-#   şeklinde geçilen YÜZLERCE parametreden herhangi biri. Buraya YENİ bir
-#   satır eklemen, koddaki build_tesseract_config() fonksiyonunun otomatik
-#   olarak "-c key=value" üretmesi için yeterli. Kodda hiçbir şey değişmez.
-#
-#   Tam liste için: `tesseract --print-parameters` komutunu çalıştır,
-#   ya da https://github.com/tesseract-ocr/tesseract/blob/main/doc/tesseract.1.asc
-#
-# Bir parametreyi devre dışı bırakmak istersen, ya satırı sil ya da yorum
-# satırı yap (#) — silinen/yorumlanan parametreler için Tesseract'ın kendi
-# varsayılanı kullanılır.
-#
-# - preprocessing: OCR'a görsel verilmeden ÖNCE uygulanan görüntü işleme
-#   adımları (run_tesseract.py içindeki preprocess_image() fonksiyonu okur).
-#   Hepsi varsayılan olarak false/kapalı — bu blok hiç olmasa bile davranış
-#   değişmez, görsel ham haliyle Tesseract'a gider.
+# This file lists the PRACTICALLY USEFUL options from all three layers —
+# not all 629 internal variables (most are debug/internal and irrelevant
+# for OCR accuracy comparison work).
 # =============================================================================
 
-model_name: "tesseract_v1"
+model_name: "tesseract_full_reference"
 
 ocr_settings:
   # ---------------------------------------------------------------------
-  # Üst seviye, en sık optimize edilen ayarlar
+  # CLI flags — handled specially in build_tesseract_config()
   # ---------------------------------------------------------------------
-  lang: "tur+eng"          # Tek dil: "tur" | "eng"  |  Çoklu: "tur+eng"
+  lang: "tur+eng"
+  # Single language: "tur" | "eng" | Multiple: "tur+eng"
 
-  psm: 6                   # Page Segmentation Mode (0-13)
-                            #  0  = Sadece yönlendirme/script tespiti (OSD)
-                            #  1  = Otomatik segmentasyon + OSD
-                            #  3  = Tam otomatik segmentasyon, OSD yok (varsayılan)
-                            #  4  = Tek sütun, değişken boyutlu metin
-                            #  6  = Tek, düzgün metin bloğu (yoğun metin/fişler için iyi)
-                            #  7  = Görsel tek bir metin satırı olarak işlenir
-                            #  8  = Görsel tek bir kelime olarak işlenir
-                            #  10 = Görsel tek bir karakter olarak işlenir
-                            #  11 = Seyrek metin, sıralama önemli değil
-                            #  13 = Ham satır, dil-özel hack'ler devre dışı
+  psm: 6
+  # Page Segmentation Mode (0-13):
+  #   0  = Orientation/script detection (OSD) only
+  #   1  = Automatic page segmentation with OSD
+  #   3  = Fully automatic segmentation, no OSD (Tesseract's own default)
+  #   4  = Single column of variable-sized text
+  #   6  = Single uniform block of text (good for dense text/receipts)
+  #   7  = Treat image as a single text line
+  #   8  = Treat image as a single word
+  #   10 = Treat image as a single character
+  #   11 = Sparse text, order doesn't matter
+  #   13 = Raw line, language-specific hacks disabled
 
-  oem: 3                   # OCR Engine Mode (0-3)
-                            #  0 = Sadece eski Tesseract motoru
-                            #  1 = Sadece LSTM (nöral ağ) motoru
-                            #  2 = Eski + LSTM birlikte
-                            #  3 = Mevcut olana göre otomatik seç (varsayılan, önerilen)
+  oem: 3
+  # OCR Engine Mode (0-3):
+  #   0 = Legacy engine only
+  #   1 = LSTM (neural net) engine only
+  #   2 = Legacy + LSTM combined
+  #   3 = Automatically pick whichever is available (recommended default)
 
-  dpi: 300                 # Görsel çözünürlüğü (genelde 300-400 arası ideal sonuç verir)
+  dpi: 300
+  # Image resolution hint (300-400 generally gives good results)
 
   # ---------------------------------------------------------------------
-  # Serbest "-c key=value" parametreleri
-  # Buraya İSTEDİĞİN KADAR satır ekleyebilirsin, kod otomatik işler.
+  # pytesseract.image_to_data() Python-level parameters — NOT Tesseract
+  # -c variables, these are handled directly in run_tesseract.py
+  # ---------------------------------------------------------------------
+  timeout: 0
+  # (seconds, default 0 = no limit) If Tesseract takes longer than this
+  # for a single image, pytesseract raises an error — run_tesseract.py
+  # catches this and re-raises with a clear message, which main.py's
+  # error-tolerance mechanism then reports and skips, continuing with the
+  # rest of the batch. Useful as a safety valve against very large/complex
+  # images hanging the pipeline.
+
+  # ---------------------------------------------------------------------
+  # extra_params — ALREADY supports any of Tesseract's ~629 -c VAR=VALUE
+  # config variables (see `tesseract --print-parameters` for the full
+  # list). The ones below are the practically useful subset for OCR
+  # accuracy/layout tuning — add/remove freely, no code change needed.
   # ---------------------------------------------------------------------
   extra_params:
-    # --- Boşluk / biçim koruma ---
-    preserve_interword_spaces: 1   # Kelimeler arası fazladan boşlukları koru (0/1)
+    # --- Spacing / formatting ---
+    preserve_interword_spaces: 1
+    # Preserve extra spaces between words (0/1)
 
-    # --- Karakter sınırlama (doğruluk artırmak için) ---
-    tessedit_char_whitelist: ""    # Sadece bu karakterler tanınsın (örn: "0123456789")
-    tessedit_char_blacklist: ""    # Bu karakterler ASLA tanınmasın (örn: "|~`")
+    # --- Character restriction (useful for known fixed-format fields) ---
+    tessedit_char_whitelist: ""
+    # Only recognize these characters, e.g. "0123456789" for a pure
+    # numeric field (amount, date). Empty = no restriction.
 
-    # --- Performans / paralel çalışma ---
-    tessedit_parallelize: 0        # Mümkünse paralel çalıştır (0/1)
+    tessedit_char_blacklist: ""
+    # NEVER recognize these characters, e.g. "|~`". Empty = no restriction.
 
-    # --- Sayfa/satır davranışı ---
-    include_page_breaks: 0         # Çok sayfalı çıktıda sayfa ayraçı ekle (0/1)
-    tessedit_do_invert: 0          # Karanlık zemin/açık yazı görsellerinde 1 dene
+    tessedit_char_unblacklist: ""
+    # Overrides tessedit_char_blacklist for specific characters.
 
-    # --- Kelime/satır güven eşikleri ---
-    # (Aşağıdaki parametreler Tesseract sürümüne göre değişebilir, gerekirse aç/ekle)
-    # textord_heavy_nr: 0          # Yoğun "noise removal" - taranmış/gürültülü görsellerde 1
-    # edges_max_children_per_outline: 10  # Karmaşık karakter şekillerinde ince ayar
+    # --- Performance ---
+    tessedit_parallelize: 0
+    # Run in parallel where possible (0/1)
 
-    # --- Buraya yeni parametre eklemek için örnek satır ---
-    # user_defined_dpi: 300         # dpi bilgisi görselde yoksa uyarı vermesini önler
+    # --- Page / line behavior ---
+    include_page_breaks: 0
+    # Insert page break markers in multi-page output (0/1)
+
+    user_defined_dpi: 0
+    # Explicit DPI override if the image doesn't embed DPI metadata and
+    # you want to silence Tesseract's "no DPI" warning. 0 = not set.
+
+    # --- Noise / cleanup (useful for scanned/photographed documents) ---
+    textord_heavy_nr: 0
+    # Vigorously remove noise — try 1 for noisy/scanned receipts.
+
+    # --- Output post-processing ---
+    tessedit_fix_fuzzy_spaces: 1
+    # Try to improve uncertain/fuzzy spacing between words (0/1)
+
+    tessedit_fix_hyphens: 1
+    # Try to merge words split by a hyphen at a line break (0/1)
+
+    # --- Numeric-only mode (useful for amount/date fields) ---
+    classify_bln_numeric_mode: 0
+    # Assume the input is digits only [0-9] — set to 1 for a field you
+    # KNOW only contains numbers, can meaningfully improve accuracy there.
+
+    # !!! tessedit_do_invert is DEPRECATED as of this Tesseract version —
+    # the engine itself warns it will be removed in release 6. Use
+    # invert_threshold instead (see below) if you need inverted-image
+    # retry behavior (e.g. light text on a dark background).
+    # invert_threshold: 0.7
+    # For lines with a mean confidence below this value, Tesseract also
+    # tries OCR on an inverted version of the image. (float, default 0.7)
 
 # =============================================================================
-# Görsel ön-işleme (preprocessing) — OCR'dan ÖNCE uygulanır
+# preprocessing — shared schema across all 6 engines (see _common.py)
+# All steps default to false/disabled — enabling preprocessing here does
+# NOT guarantee improved accuracy, it should be measured against real data.
+# Tesseract, being a classical (non-deep-learning) engine, tends to
+# benefit the most from preprocessing among all 6 engines — see our
+# earlier real-document test where grayscale+threshold improved
+# confidence on a noisy/shadowed receipt image.
 # =============================================================================
-# Tesseract, klasik (deep-learning öncesi) bir motor olduğu için gürültü,
-# gölge, düşük kontrast gibi durumlara EasyOCR/doctr/TrOCR'a göre daha
-# hassastır. Taranmış/fotoğraflanmış belgelerde (ehliyet, dekont vb.) bu
-# adımları açmak doğruluğu ciddi şekilde artırabilir.
-#
-# TÜM adımlar varsayılan olarak KAPALI (false). SABİT bir sırada uygulanır
-# (her biri kendinden öncekinin çıktısı üzerinde çalışır):
-#
-#   1. resize                -> çok küçük görseli büyütür
-#   2. deskew                -> eğik metni düzeltir
-#   3. autocrop_border       -> kenar boşluklarını kırpar
-#   4. illumination_correct  -> aydınlatma/gölge farkını düzeltir
-#   5. grayscale             -> renkli -> gri tonlama
-#   6. clahe                 -> bölgesel kontrast artırma
-#   7. denoise               -> küçük gürültü/leke temizleme
-#   8. sharpen               -> kenarları belirginleştirme (bulanıklık için)
-#   9. morphology            -> ince/kopuk karakterleri birleştirme (dilate/erode)
-#   10. threshold            -> gri tonları siyah/beyaza indirgeme (binarization)
-#
-# Bu şema EasyOCR/doctr/TrOCR config'leriyle BİREBİR aynıdır — hepsi aynı
-# ortak _common.preprocess_image() fonksiyonunu kullanır.
-#
-# Görselleştirme (highlighted/masked çıktılar) HER ZAMAN orijinal renkli
-# görsel üzerinden üretilir — preprocessing sadece OCR motoruna giden
-# girdiyi etkiler, kaydedilen viz dosyalarını etkilemez.
-# =============================================================================
-
 preprocessing:
-  resize: false                    # true yaparsan görsel resize_scale ile büyütülür
+  resize: false
   resize_scale: 2.0
 
-  deskew: false                    # true yaparsan eğik metin otomatik düzeltilir
+  deskew: false
 
-  autocrop_border: false           # true yaparsan kenar boşlukları kırpılır
+  autocrop_border: false
   autocrop_margin_ratio: 0.01
 
-  illumination_correct: false      # true yaparsan gölge/aydınlatma farkı düzeltilir
+  illumination_correct: false
   illumination_kernel_size: 51
 
-  grayscale: true                 # true yaparsan renkli -> gri tonlama
+  grayscale: false
 
-  clahe: false                     # true yaparsan bölgesel kontrast artırma (CLAHE)
+  clahe: false
   clahe_clip_limit: 2.0
   clahe_grid_size: 8
 
-  denoise: false                   # true yaparsan küçük gürültü/leke temizliği
+  denoise: false
 
-  sharpen: false                   # true yaparsan keskinleştirme (bulanıklık için)
+  sharpen: false
 
-  morphology: false                # true yaparsan dilate/erode uygulanır
-  morphology_op: "dilate"          # "dilate" | "erode"
+  morphology: false
+  morphology_op: "dilate"
   morphology_kernel_size: 2
 
-  threshold: false                 # true yaparsan adaptive threshold (binarization)
-  threshold_block_size: 35         # adaptive threshold pencere boyutu (TEK SAYI olmalı)
-  threshold_c: 11                  # adaptive threshold sabiti (yüksek = daha çok beyaz)
+  threshold: false
+  threshold_block_size: 35
+  threshold_c: 11

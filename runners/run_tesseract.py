@@ -49,6 +49,14 @@ def run_tesseract(image_path, config_path):
     font_path_config = ocr_settings.get("font_path")  # opsiyonel, extra_params'a da eklenebilir
     tess_config = build_tesseract_config(ocr_settings)
 
+    # pytesseract.image_to_data()'nın kendi Python-seviyesi parametresi
+    # (Tesseract binary'sinin -c parametrelerinden FARKLI bir katman).
+    # timeout: bu görsel için Tesseract bu süreyi (saniye) aşarsa
+    # pytesseract.TesseractError fırlatır — özellikle çok büyük/karmaşık
+    # görsellerde "takılı kalma" riskine karşı bir güvenlik valfi. 0 veya
+    # belirtilmezse sınırsız (varsayılan davranış, önceki haliyle aynı).
+    timeout = ocr_settings.get("timeout", 0)
+
     # --- image_load_time_seconds: görseli diskten okuma süresi ---
     image_load_start = time.time()
     img = cv2.imread(image_path)
@@ -85,8 +93,22 @@ def run_tesseract(image_path, config_path):
     start_time = time.time()  # Süre BURADA başlar — preprocessing süreye dahil
     # DEĞİL, çünkü ölçmek istediğimiz "OCR motorunun kendisi ne kadar sürdü"
 
-    # Tek OCR çağrısı — hem text hem layout (bbox/conf) bundan geliyor
-    d = pytesseract.image_to_data(ocr_input, lang=lang, config=tess_config, output_type=Output.DICT)
+    # Tek OCR çağrısı — hem text hem layout (bbox/conf) bundan geliyor.
+    # timeout > 0 ise ve Tesseract bu süreyi aşarsa, pytesseract bir
+    # TesseractError fırlatır — bu, main.py'nin "bir görseldeki hata diğer
+    # görselleri durdurmaz" mekanizmasıyla zaten ele alınıyor.
+    try:
+        d = pytesseract.image_to_data(
+            ocr_input, lang=lang, config=tess_config, output_type=Output.DICT, timeout=timeout,
+        )
+    except RuntimeError as e:
+        # pytesseract zaman aşımında RuntimeError fırlatır (TesseractError
+        # değil) — net bir mesajla, hangi görselin/sürenin sorumlu olduğunu
+        # belirterek yeniden fırlatıyoruz.
+        raise RuntimeError(
+            f"Tesseract zaman aşımına uğradı (timeout={timeout}s): {image_path}. "
+            f"Orijinal hata: {e}"
+        ) from e
 
     execution_time = round(time.time() - start_time, 4)  # Süre BURADA donar
 

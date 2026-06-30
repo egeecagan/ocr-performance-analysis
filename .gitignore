@@ -5,6 +5,7 @@
 # Input görselleri (ehliyet/dekont gibi hassas/kişisel veriler içerebilir)
 inputs/images/
 inputs/truths/
+file_fields/
 
 # Tüm OCR çıktıları (JSON sonuçları + highlighted/masked viz görselleri)
 outputs/

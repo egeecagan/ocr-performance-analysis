@@ -130,7 +130,6 @@ def process_pipeline(engine, model_name):
 
 if __name__ == "__main__":
     #process_pipeline("easyocr", "model_v1")
-    #process_pipeline("trocr", "model_v1")
     #process_pipeline("tesseract", "model_v1")
-    process_pipeline("doctr", "model_v1")
-    #process_pipeline("rapidocr", "model_v1")
+    #process_pipeline("doctr", "model_v1")
+    process_pipeline("rapidocr", "model_v1")

@@ -42,7 +42,6 @@ shared_kwargs:
 
 from runners.run_tesseract import run_tesseract
 from runners.run_easyocr import run_easyocr
-from runners.run_trocr import run_trocr
 from runners.run_doctr import run_doctr
 from runners.run_rapidocr import run_rapidocr
 
@@ -106,25 +105,6 @@ def _load_doctr_model(config_path):
     return {"model": model}
 
 
-def _load_trocr_model(config_path):
-    """Sets up the TrOCR processor+model ONCE, based on the model name in the config."""
-    from transformers import TrOCRProcessor, VisionEncoderDecoderModel
-    import torch
-
-    config = load_config(config_path)
-    settings = config.get("ocr_settings", {})
-    model_name = settings.get("model_name", "microsoft/trocr-base-handwritten")
-    gpu_setting = settings.get("gpu", "auto")
-    gpu = torch.cuda.is_available() if gpu_setting == "auto" else bool(gpu_setting)
-    device = "cuda" if gpu else "cpu"
-
-    processor = TrOCRProcessor.from_pretrained(model_name)
-    model = VisionEncoderDecoderModel.from_pretrained(model_name)
-    model.to(device)
-
-    return {"processor": processor, "model": model}
-
-
 def _load_rapidocr_engine(config_path):
     """Sets up the RapidOCR engine ONCE, based on the language/model_selection settings in the config."""
     from rapidocr import RapidOCR
@@ -164,11 +144,6 @@ ENGINES = {
         "run_function": run_doctr,
         "loader": _load_doctr_model,
         "shared_kwargs": {"model": "model"},
-    },
-    "trocr": {
-        "run_function": run_trocr,
-        "loader": _load_trocr_model,
-        "shared_kwargs": {"processor": "processor", "model": "model"},
     },
     "rapidocr": {
         "run_function": run_rapidocr,

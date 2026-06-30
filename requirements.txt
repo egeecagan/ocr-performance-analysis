@@ -36,6 +36,7 @@ torch==2.12.1
 
 # --- RapidOCR ---
 rapidocr==3.9.0
+onnxruntime
 
 # --- PaddleOCR ---
 # NOT: paddlepaddle Apple Silicon Mac'te desteklenmeyebilir — bu durumda
