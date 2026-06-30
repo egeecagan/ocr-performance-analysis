@@ -220,6 +220,8 @@ def run_doctr(image_path, config_path, model=None):
     overlay = img.copy()
 
     confidences = []
+    words = []  # GUI/web arayüzü için: her kelimenin metni, bbox'ı ve
+    # kendi confidence'ı.
 
     for page in result.pages:
         for block in page.blocks:
@@ -236,8 +238,16 @@ def run_doctr(image_path, config_path, model=None):
                     cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 0, 255), -1)
 
                     # doctr her kelime için word.confidence (0-1 arası) döndürür.
+                    word_confidence = None
                     if hasattr(word, "confidence") and word.confidence is not None:
                         confidences.append(word.confidence)
+                        word_confidence = round(word.confidence * 100, 2)
+
+                    words.append({
+                        "text": getattr(word, "value", ""),
+                        "bbox": [x1, y1, x2, y2],
+                        "confidence": word_confidence,
+                    })
 
     # --- avg_confidence ---
     # doctr'ın her kelime için verdiği confidence'ı (0-1) Tesseract/EasyOCR
@@ -266,6 +276,8 @@ def run_doctr(image_path, config_path, model=None):
 
     return {
         "text": text,
+        # words: GUI/web arayüzü için kelime bazlı bbox+confidence listesi.
+        "words": words,
         # raw_text: result.render()'ın ORİJİNAL çok satırlı hali (satır
         # sonları korunmuş). "text" alanı diğer motorlarla (Tesseract,
         # EasyOCR) tutarlı tek-satır formatında — accuracy/CER/WER

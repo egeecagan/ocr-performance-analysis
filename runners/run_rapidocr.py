@@ -222,12 +222,23 @@ def run_rapidocr(image_path, config_path, engine=None):
 
     font_path = resolve_font_path(font_path_config)
 
-    for box, text in zip(boxes, texts):
+    words = []  # GUI/web arayüzü için: her kelimenin metni, bbox'ı ve
+    # kendi confidence'ı. scores ile text/box aynı indekste eşleşiyor
+    # (RapidOCR'ın kendi sözleşmesi), bu yüzden enumerate ile indeksliyoruz.
+
+    for i, (box, text) in enumerate(zip(boxes, texts)):
         # box: 4 köşe noktası [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
         xs = [pt[0] for pt in box]
         ys = [pt[1] for pt in box]
         x, y = int(min(xs)), int(min(ys))
         w, h = int(max(xs) - min(xs)), int(max(ys) - min(ys))
+
+        word_confidence = round(scores[i] * 100, 2) if i < len(scores) else None
+        words.append({
+            "text": text,
+            "bbox": [x, y, x + w, y + h],
+            "confidence": word_confidence,
+        })
 
         cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 255), -1)
 
@@ -250,6 +261,8 @@ def run_rapidocr(image_path, config_path, engine=None):
 
     return {
         "text": recognized_text,
+        # words: GUI/web arayüzü için kelime bazlı bbox+confidence listesi.
+        "words": words,
         "load_time_seconds": load_time,
         "image_load_time_seconds": image_load_time,
         "preprocessing_time_seconds": preprocessing_time,

@@ -185,11 +185,21 @@ def run_paddleocr(image_path, config_path, engine=None):
 
     font_path = resolve_font_path(font_path_config)
 
-    for poly, text in zip(polys, texts):
+    words = []  # GUI/web arayüzü için: her kelimenin metni, bbox'ı ve
+    # kendi confidence'ı. scores, texts/polys ile aynı indekste eşleşiyor.
+
+    for i, (poly, text) in enumerate(zip(polys, texts)):
         poly_arr = np.array(poly)
         x, y = int(poly_arr[:, 0].min()), int(poly_arr[:, 1].min())
         w = int(poly_arr[:, 0].max() - poly_arr[:, 0].min())
         h = int(poly_arr[:, 1].max() - poly_arr[:, 1].min())
+
+        word_confidence = round(scores[i] * 100, 2) if i < len(scores) else None
+        words.append({
+            "text": text,
+            "bbox": [x, y, x + w, y + h],
+            "confidence": word_confidence,
+        })
 
         cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 255), -1)
 
@@ -212,6 +222,8 @@ def run_paddleocr(image_path, config_path, engine=None):
 
     return {
         "text": recognized_text,
+        # words: GUI/web arayüzü için kelime bazlı bbox+confidence listesi.
+        "words": words,
         "load_time_seconds": load_time,
         "image_load_time_seconds": image_load_time,
         "preprocessing_time_seconds": preprocessing_time,

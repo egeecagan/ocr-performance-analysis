@@ -3,6 +3,7 @@
 # =============================================================================
 
 # Input görselleri (ehliyet/dekont gibi hassas/kişisel veriler içerebilir)
+inputs/
 inputs/images/
 inputs/truths/
 file_fields/

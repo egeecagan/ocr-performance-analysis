@@ -131,13 +131,21 @@ def run_tesseract(image_path, config_path):
     n_boxes = len(d['text'])
     recognized_words = []
     confidences = []
+    words = []  # GUI/web arayüzü için: her kelimenin metni, bbox'ı ve
+    # kendi confidence'ı — tutarlı format: bbox=[x1, y1, x2, y2]
 
     for i in range(n_boxes):
         if int(d['conf'][i]) > 0 and d['text'][i].strip() != "":
             (x, y, w, h) = (d['left'][i], d['top'][i], d['width'][i], d['height'][i])
             text_found = d['text'][i]
+            word_confidence = int(d['conf'][i])
             recognized_words.append(text_found)
-            confidences.append(int(d['conf'][i]))
+            confidences.append(word_confidence)
+            words.append({
+                "text": text_found,
+                "bbox": [int(x), int(y), int(x + w), int(y + h)],
+                "confidence": round(word_confidence, 2),
+            })
 
             # --- Highlight (Kırmızı kutular) ---
             cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 255), -1)
@@ -169,6 +177,11 @@ def run_tesseract(image_path, config_path):
 
     return {
         "text": " ".join(recognized_words),
+        # words: GUI/web arayüzü için kelime bazlı bbox+confidence listesi.
+        # Her motorda BİREBİR AYNI format: {"text", "bbox": [x1,y1,x2,y2],
+        # "confidence"} — arayüz hangi motordan geldiğini bilmeden aynı
+        # şekilde işleyebilsin diye.
+        "words": words,
         "load_time_seconds": load_time,
         "image_load_time_seconds": image_load_time,
         "preprocessing_time_seconds": preprocessing_time,

@@ -2,6 +2,7 @@ import os
 import json
 import time
 from pathlib import Path
+import yaml
 
 from runners.registry import ENGINES
 
@@ -26,19 +27,23 @@ CONFIGS_DIR = BASE_DIR / "configurations"
 def load_ground_truth(img_name, truths_dir=TRUTHS_DIR):
     """
     Loads the ground-truth text file matching an image, if one exists.
-    Example: image1.png -> inputs/truths/image1.txt
+    Example: image1.png -> inputs/truths/image1.yaml
 
     Returns:
         (text, True)  if the file exists
         (None, False) otherwise
     """
-    truth_path = Path(truths_dir) / f"{Path(img_name).stem}.txt"
+    truth_path = Path(truths_dir) / f"{Path(img_name).stem}.yaml"
 
     if truth_path.exists():
         with open(truth_path, "r", encoding="utf-8") as f:
-            ground_truth_text = f.read().strip()
-        return ground_truth_text, True
+            data = yaml.safe_load(f)
 
+            # if data is none then it returns empty dictionary!!!
+            if data is None: 
+                return None, False
+                
+        return data, True
     return None, False
 
 
@@ -129,7 +134,7 @@ def process_pipeline(engine, model_name):
 
 
 if __name__ == "__main__":
-    #process_pipeline("easyocr", "model_v1")
-    #process_pipeline("tesseract", "model_v1")
-    #process_pipeline("doctr", "model_v1")
+    process_pipeline("easyocr", "model_v1")
+    process_pipeline("tesseract", "model_v1")
+    process_pipeline("doctr", "model_v1")
     process_pipeline("rapidocr", "model_v1")

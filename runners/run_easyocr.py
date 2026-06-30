@@ -157,6 +157,10 @@ def run_easyocr(image_path, config_path, reader=None):
     can_visualize = (detail != 0) and (not paragraph)
 
     confidences = []
+    words = []  # GUI/web arayüzü için: her kelimenin metni, bbox'ı ve
+    # kendi confidence'ı. Sadece can_visualize=True iken (gerçek bbox
+    # mevcut) dolar — detail=0 veya paragraph=true durumunda boş kalır,
+    # çünkü o senaryolarda gerçek bbox bilgisi yok/test edilmemiş.
 
     if can_visualize:
         for (bbox, text, prob) in results:
@@ -166,6 +170,11 @@ def run_easyocr(image_path, config_path, reader=None):
             h = int(bottom_right[1] - top_left[1])
 
             confidences.append(prob)
+            words.append({
+                "text": text,
+                "bbox": [x, y, x + w, y + h],
+                "confidence": round(prob * 100, 2),
+            })
 
             cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 255), -1)
 
@@ -235,6 +244,10 @@ def run_easyocr(image_path, config_path, reader=None):
 
     return {
         "text": recognized_text,
+        # words: GUI/web arayüzü için kelime bazlı bbox+confidence listesi.
+        # detail=0 veya paragraph=true ise BOŞ liste döner (gerçek bbox
+        # bilgisi o senaryolarda mevcut değil/test edilmemiş).
+        "words": words,
         "load_time_seconds": load_time,
         "image_load_time_seconds": image_load_time,
         "preprocessing_time_seconds": preprocessing_time,
