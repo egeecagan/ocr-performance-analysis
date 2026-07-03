@@ -89,12 +89,15 @@ project/
 ├── runners/
 │   ├── _common.py               # Shared helper functions
 │   ├── registry.py              # Engine registry
+│   ├── accuracy.py
+│   ├──lcs_cer.py
 │   └── run_<engine>.py          # Runner for each engine (6 files)
+│
 ├── configurations/
 │   └── <engine>/model_v1.yaml   # One config per engine + version
 ├── inputs/
 │   ├── images/                  # Test images (licenses, receipts, etc.) — excluded from git
-│   └── truths/                  # Ground-truth .txt files (optional, for CER/WER)
+│   └── truths/                  # Ground-truth .yaml, .txt files (optional, for CER/WER)
 └── outputs/
     └── <engine>/<model_name>/
         ├── <image_name>.json    # OCR result + timing + confidence + ground truth
