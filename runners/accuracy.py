@@ -8,12 +8,6 @@ kütüphane:
 
   - normalize_text / turkish_lower / turkish_to_ascii: Türkçe-uyumlu metin
     normalizasyonu (lcs_cer.py bunları YENİDEN KULLANIYOR — kopyalamıyor).
-  - _are_neighbors / _vertical_overlap_ratio / _group_into_lines* /
-    _generate_merge_candidates: OCR motorunun bir kelimeyi birden fazla
-    kutuya bölmüş olma ihtimaline karşı komşu-kutu-birleştirme mantığı.
-    Bu, bbox GEOMETRİSİNE dayalı olduğu için hangi skorlama yöntemini
-    (fuzzy ya da CER) kullandığımızdan TAMAMEN BAĞIMSIZ — lcs_cer.py da
-    bunu YENİDEN KULLANIYOR.
   - load_common_fields / detect_common_fields_file: inputs/truths/
     common_fields/*.txt dosyalarını okuma ve görsel adına göre otomatik
     seçme — main.py bunları doğrudan çağırıyor.
@@ -29,6 +23,18 @@ doğru sonuç veriyor (OCR'ın bir kelimeyi TAMAMEN atladığı durumlarda
 fuzzy skorun ürettiği yanıltıcı/rastgele eşleşmeler ortadan kalkıyor) VE
 aynı zamanda piksel konumunu (bbox) da hesaba katıyor.
 
+Komşu-kutu-birleştirme fonksiyonları da (_are_neighbors,
+_vertical_overlap_ratio, _group_into_lines*, _generate_merge_candidates)
+AYNI GEREKÇEYLE KALDIRILDI: eski fuzzy yöntemde, bir kelimenin OCR
+tarafından birden fazla kutuya bölünmesi (örn. "İstanbul" -> "İstan" +
+"bul") skoru düşürebiliyordu, bu yüzden komşu kutuları birleştirip TEKRAR
+deniyorduk. CER/WER'e geçince bu ihtiyaç ORTADAN KALKTI: find_lcs_match
+zaten "bu kısa metin, referansın İÇİNDE bir yerde geçiyor mu" diye
+baktığı için, bölünmüş bir kelimenin HER PARÇASI TEK BAŞINA bile genelde
+referansın TAM bir alt-dizesi olarak bulunup cer=0.0 alıyor — ayrıca
+birleştirmeye gerek kalmıyor (bkz. lcs_cer.py'deki enrich_words_with_
+field_matches_lcs docstring'i, detaylı gerekçe orada).
+
 === Türkçe büyük/küçük harf çevirimi NEDEN ÖZEL ===
 Python'un standart str.lower() Türkçe'de YANLIŞ sonuç verir:
   - "İ".lower() -> "i̇" (i + AYRI bir "combining dot above" karakteri,
@@ -43,7 +49,6 @@ standart İngilizce odaklı .lower() kullanmıyoruz; önce Türkçe'ye özel
 """
 
 import re
-from collections import defaultdict
 from pathlib import Path
 
 
@@ -141,214 +146,6 @@ def normalize_text(text, ascii_normalize=False):
 # çok kısa, güvenilir şekilde bir alana atfedilemedi" anlamına gelir, web
 # arayüzünde böyle gösterilmelidir.
 MIN_WORD_LENGTH_FOR_FIELD_MATCH = 3
-
-
-def _are_neighbors(bbox_a, bbox_b, max_horizontal_gap_ratio=0.5):
-    """
-    İki bbox'ın "komşu" sayılıp sayılmayacağına karar verir — yani
-    aralarında metin birleştirme denemesi yapmaya değer mi.
-
-    Komşu sayılma şartları (ikisi de sağlanmalı):
-      1. AYNI SATIRDA: y-eksenindeki (dikey) aralıkları örtüşüyor olmalı
-         — yani iki kutu da yaklaşık aynı yükseklikte.
-      2. YATAYDA YAKIN: aralarındaki yatay boşluk, bbox_a'nın kendi
-         yüksekliğine göre "makul" bir mesafede olmalı (çok uzaktaysa
-         muhtemelen ayrı kelimeler/alanlar, birleştirmeye değmez).
-
-    bbox formatı: [x1, y1, x2, y2] (tüm 5 motorda tutarlı format).
-
-    NOT: Bu fonksiyon artık SADECE aynı satır grubu içindeki (bkz.
-    _group_into_lines) ardışık kutular için çağrılıyor — yani "aynı
-    satırda mı" sorusunun asıl/kaba cevabı zaten _group_into_lines
-    tarafından veriliyor. Buradaki dikey örtüşme kontrolü, aynı satır
-    grubuna düşmüş ama yine de dikey olarak hiç örtüşmeyen (örn. yanlış
-    gruplanmış) uç durumlara karşı ek bir güvenlik katmanı.
-
-    max_horizontal_gap_ratio: bbox_a'nın yüksekliğine göre, izin verilen
-    maksimum yatay boşluk oranı. Örn. 0.5 ise, kutunun yüksekliğinin
-    yarısı kadar (ya da daha az) boşluk varsa komşu sayılır — bu, normal
-    kelime arası boşluğu tolere ederken, gerçekten uzak/alakasız
-    kutuları elemeye yarar.
-    """
-    ax1, ay1, ax2, ay2 = bbox_a
-    bx1, by1, bx2, by2 = bbox_b
-
-    # --- 1. Aynı satırda mı? (dikey örtüşme kontrolü) ---
-    vertical_overlap = min(ay2, by2) - max(ay1, by1)
-    if vertical_overlap <= 0:
-        return False
-
-    # --- 2. Yatayda yeterince yakın mı? ---
-    a_height = ay2 - ay1
-    if a_height <= 0:
-        return False
-
-    horizontal_gap = bx1 - ax2  # b, a'nın SAĞINDA olmalı (pozitif boşluk)
-    if horizontal_gap < 0:
-        # b, a'nın solunda veya üst üste biniyor — bu fonksiyon sadece
-        # "a'nın sağındaki komşuyu" kontrol etmek için kullanılıyor.
-        return False
-
-    return horizontal_gap <= a_height * max_horizontal_gap_ratio
-
-
-def _vertical_overlap_ratio(bbox_a, bbox_b):
-    """
-    İki bbox'ın dikey örtüşme ORANINI (0-1 arası) döndürür — mutlak piksel
-    farkı değil, İKİ KUTUDAN KÜÇÜK OLANIN yüksekliğine göre oranlanmış bir
-    değer. Bu, farklı font/kutu boyutlarında (örn. küçük bir etiket
-    kelimesiyle büyük bir başlık) tutarlı bir "aynı satırda mı" ölçütü
-    sağlar.
-
-    _are_neighbors'taki "vertical_overlap <= 0" kontrolünden farklı olarak
-    burada bir EŞİK KARŞILAŞTIRMASI yapılmıyor — sadece oran hesaplanıp
-    döndürülüyor, eşik kararı çağıran tarafta (_group_into_lines_geometric)
-    veriliyor. Bu ayrım, eşiği tek bir yerde (fonksiyon çağrısında) kolayca
-    ayarlanabilir kılmak için.
-    """
-    ay1, ay2 = bbox_a[1], bbox_a[3]
-    by1, by2 = bbox_b[1], bbox_b[3]
-
-    overlap = min(ay2, by2) - max(ay1, by1)
-    min_height = min(ay2 - ay1, by2 - by1)
-
-    if min_height <= 0:
-        return 0.0
-
-    return max(0.0, overlap) / min_height
-
-
-def _group_into_lines_geometric(words, overlap_threshold=0.3):
-    """
-    line_id bilgisi OLMAYAN motorlar (örn. EasyOCR, RapidOCR) için: hiçbir
-    kesin satır/blok hiyerarşisi verilmediğinden, kutuları SADECE bbox
-    dikey örtüşmelerine bakarak satır gruplarına ayırmaya ÇALIŞIR — bu bir
-    TAHMİNDİR, Tesseract/doctr'daki gibi motorun kendi kesin segmentasyonu
-    DEĞİLDİR.
-
-    Yöntem: kutuları y1'e göre sıralayıp, her kutuyu şu ana kadar oluşmuş
-    satır gruplarından biriyle (o gruptaki HERHANGİ bir kutuyla dikey
-    örtüşme oranı eşiği geçiyorsa) eşleştiriyoruz; eşleşme yoksa yeni bir
-    grup açıyoruz. Mutlak "overlap > 0" yerine ORANSAL bir eşik (varsayılan
-    %30) kullanılıyor ki hafif eğik (skewed) taranmış/fotoğraflanmış
-    belgelerde satırlar piksel bazında tam hizalı olmasa da doğru
-    gruplansın.
-
-    Dönen her grup, kendi içinde x1'e (soldan sağa) göre sıralanmış olarak
-    döner — _generate_merge_candidates'ın komşuluk taramasının doğru
-    sırada çalışması için gerekli.
-
-    Döndürür: [[(orijinal_indeks, kelime_dict), ...], ...] — liste
-    liste, dış liste satırları, iç liste o satırdaki (indeks, kelime)
-    çiftlerini x1 sırasıyla tutar.
-    """
-    indexed = sorted(enumerate(words), key=lambda iw: iw[1]["bbox"][1])
-    lines = []
-
-    for idx, word in indexed:
-        bbox = word["bbox"]
-        placed = False
-        for line in lines:
-            if any(
-                _vertical_overlap_ratio(bbox, existing_word["bbox"]) >= overlap_threshold
-                for _, existing_word in line
-            ):
-                line.append((idx, word))
-                placed = True
-                break
-        if not placed:
-            lines.append([(idx, word)])
-
-    return [sorted(line, key=lambda iw: iw[1]["bbox"][0]) for line in lines]
-
-
-def _group_into_lines(words):
-    """
-    Kutuları satır gruplarına ayırmak için İKİ yoldan birini seçer:
-
-      1. TÜM kutularda "line_id" alanı VARSA (örn. Tesseract'ın
-         block_num-par_num-line_num'dan, doctr'ın page-block-line
-         indekslerinden ürettiği kimlik): motorun KENDİ kesin satır
-         segmentasyonuna güveniyoruz. Bu, bbox geometrisinden tahmin
-         etmekten daha güvenilirdir — motorun kendi iç algoritması
-         eğiklik/gürültüye karşı daha dayanıklı çalışır.
-
-      2. Herhangi bir kutuda "line_id" YOKSA (örn. EasyOCR, RapidOCR —
-         bu motorlar satır/blok hiyerarşisi vermez): bbox dikey
-         örtüşmesine dayalı GEOMETRİK TAHMİNE düşülür
-         (_group_into_lines_geometric).
-
-    Neden "TÜM kutularda var mı" kontrolü (kısmi değil): bir motorun
-    çıktısında bazı kutularda line_id olup bazılarında olmaması
-    beklenmez (motor ya hep sağlar ya hiç sağlamaz) — ama karışık bir
-    girdi ihtimaline karşı, tutarsız/eksik line_id ile yanlış gruplama
-    yapmak yerine güvenli tarafta kalıp geometrik tahmine düşülüyor.
-
-    Döndürür: _group_into_lines_geometric ile AYNI format — satır
-    gruplarının listesi, her grup x1'e göre sıralı (indeks, kelime) çiftleri.
-    """
-    if words and all("line_id" in w and w["line_id"] is not None for w in words):
-        lines_by_id = defaultdict(list)
-        for idx, w in enumerate(words):
-            lines_by_id[w["line_id"]].append((idx, w))
-        return [
-            sorted(group, key=lambda iw: iw[1]["bbox"][0])
-            for group in lines_by_id.values()
-        ]
-
-    return _group_into_lines_geometric(words)
-
-
-def _generate_merge_candidates(words):
-    """
-    "words" listesindeki her kutu için, SAĞINDAKİ 1-2 komşu kutuyla
-    birleştirilmiş metin adayları üretir (2'li ve 3'lü gruplar).
-
-    Bu, bazı motorların tek bir kelimeyi birden fazla küçük kutuya
-    bölmesi durumunda (örn. "İstanbul" -> "İstan" + "bul" gibi iki ayrı
-    kutu), kutuları birleştirerek doğru kelimeyi yeniden oluşturmayı
-    dener.
-
-    === Satır gruplama NEDEN önce yapılır ===
-    Bu belge tek bir satırdan ibaret değil — genelde birden fazla satır
-    içerir (örn. "Ad: Cengizhan" ve "Tarih: 25.08.2014" iki AYRI satır).
-    Kutuları doğrudan x1 koordinatına göre GLOBAL sıralayıp ardışık
-    çiftleri denersek, farklı satırlardan kutular birbirinin "komşusu"
-    gibi test edilir (örn. "Ad:" ile "Tarih:" arası denenir, ama gerçek
-    komşusu olan "Ad:" + "Cengizhan" hiç yan yana gelmeyebilir çünkü
-    aralarına başka satırdan bir kutu girmiştir). Bunu önlemek için önce
-    _group_into_lines ile kutuları satır gruplarına ayırıyoruz, SONRA
-    komşuluk taramasını SADECE her grup İÇİNDE yapıyoruz.
-
-    Döndürür: [(birlesik_metin, [orijinal_kutu_indeksleri]), ...] listesi
-    — sadece GERÇEKTEN komşu olan (aynı satır grubu + yakın) kutu
-    çiftleri/üçlüleri için, farklı satırlardan ya da rastgele uzak
-    kutuları asla birleştirmez.
-    """
-    line_groups = _group_into_lines(words)
-
-    candidates = []
-
-    for group in line_groups:
-        n = len(group)
-        for i in range(n):
-            idx_a, word_a = group[i]
-
-            # --- 2'li grup: word_a + sağındaki 1 komşu (aynı satır grubu içinde) ---
-            if i + 1 < n:
-                idx_b, word_b = group[i + 1]
-                if _are_neighbors(word_a["bbox"], word_b["bbox"]):
-                    merged_text = f"{word_a['text']} {word_b['text']}".strip()
-                    candidates.append((merged_text, [idx_a, idx_b]))
-
-                    # --- 3'lü grup: word_a + sağındaki 2 komşu ---
-                    if i + 2 < n:
-                        idx_c, word_c = group[i + 2]
-                        if _are_neighbors(word_b["bbox"], word_c["bbox"]):
-                            merged_text_3 = f"{merged_text} {word_c['text']}".strip()
-                            candidates.append((merged_text_3, [idx_a, idx_b, idx_c]))
-
-    return candidates
 
 
 def load_common_fields(common_fields_path):

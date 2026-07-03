@@ -49,7 +49,6 @@ EK bir bakış açısı (klasik CER/WER + piksel konumu) sunar.
 """
 
 import re
-from collections import defaultdict
 from difflib import SequenceMatcher
 
 from rapidfuzz.distance import Levenshtein
@@ -59,19 +58,13 @@ from rapidfuzz.distance import Levenshtein
 # kullanıyoruz — iki modülün normalizasyon mantığı TUTARSIZ olursa aynı
 # metin için farklı modüllerden çelişkili sonuçlar çıkabilir. Bu yüzden
 # KENDİ normalizasyonumuzu YENİDEN YAZMIYORUZ, accuracy.py'dekini import
-# ediyoruz. _generate_merge_candidates de aynı gerekçeyle import ediliyor:
-# komşu-kutu-birleştirme (bir kelimenin OCR tarafından birden fazla kutuya
-# bölünmüş olma ihtimali) mantığı, hangi SKORLAMA yöntemini kullandığımızdan
-# (fuzzy ya da CER) TAMAMEN BAĞIMSIZ — sadece bbox geometrisine bakıyor,
-# bu yüzden kopyalamak yerine accuracy.py'dekini yeniden kullanıyoruz.
-# MIN_WORD_LENGTH_FOR_FIELD_MATCH da aynı gerekçeyle: "çok kısa bir kutu
-# güvenilir eşleştirilemez" kararı, hangi modülde olursak olalım AYNI
-# olmalı.
+# ediyoruz. MIN_WORD_LENGTH_FOR_FIELD_MATCH de aynı gerekçeyle: "çok kısa
+# bir kutu güvenilir eşleştirilemez" kararı, hangi modülde olursak olalım
+# AYNI olmalı.
 from runners.accuracy import (
     normalize_text,
     turkish_lower,
     turkish_to_ascii,
-    _generate_merge_candidates,
     MIN_WORD_LENGTH_FOR_FIELD_MATCH,
 )
 
@@ -608,19 +601,27 @@ def find_best_matching_field_lcs(word_text, fields, ascii_normalize=True):
 
 def enrich_words_with_field_matches_lcs(words, fields, ascii_normalize=True):
     """
-    accuracy.py'deki enrich_words_with_field_matches'ın CER/WER tabanlı
-    eşdeğeri — "words" listesindeki HER kutuyu, find_best_matching_field_lcs
-    ile zenginleştirir. main.py bunu, JSON'a yazmadan ÖNCE çağırır, böylece
-    web arayüzü hiçbir hesaplama yapmadan hazır veriyi okur.
+    accuracy.py'deki (kaldırılan) enrich_words_with_field_matches'ın
+    CER/WER tabanlı eşdeğeri — "words" listesindeki HER kutuyu,
+    find_best_matching_field_lcs ile zenginleştirir. main.py bunu, JSON'a
+    yazmadan ÖNCE çağırır, böylece web arayüzü hiçbir hesaplama yapmadan
+    hazır veriyi okur.
 
-    === Komşu kutu birleştirme ===
-    accuracy.py'deki AYNI mantık: bazı motorlar tek bir mantıksal kelimeyi
-    birden fazla küçük kutuya bölebiliyor (örn. "İstanbul" -> "İstan" +
-    "bul"). Bu fonksiyon, her kutuyu hem TEK BAŞINA hem SAĞINDAKİ 1-2
-    komşusuyla BİRLEŞTİRİLMİŞ olarak dener, hangisi DAHA DÜŞÜK cer veriyorsa
-    onu kullanır. Komşu adayları accuracy.py'deki _generate_merge_candidates
-    ile üretiliyor (bbox geometrisine dayalı, skorlama yönteminden BAĞIMSIZ
-    — bu yüzden kopyalanmadı, doğrudan import edildi).
+    === Komşu kutu birleştirme NEDEN KALDIRILDI ===
+    Eski fuzzy yöntemde (RapidFuzz partial_ratio), bir kelimenin OCR
+    tarafından birden fazla kutuya bölünmesi (örn. "İstanbul" -> "İstan" +
+    "bul") skoru ciddi düşürebiliyordu — bu yüzden komşu kutuları
+    birleştirip TEKRAR deniyorduk. CER/WER'e (bu modül) geçince bu gerek
+    KALMADI: find_lcs_match zaten "bu kısa metin, referansın İÇİNDE bir
+    yerde geçiyor mu" diye baktığı için, bölünmüş bir kelimenin HER PARÇASI
+    TEK BAŞINA bile genelde referansın TAM bir alt-dizesi olarak bulunur ve
+    cer=0.0 alır (örn. find_lcs_match("İstan", "İstanbul") -> cer=0.0,
+    find_lcs_match("bul", "İstanbul") -> cer=0.0 — ikisi de zaten mükemmel).
+    Birleştirmenin fayda sağlayacağı tek durum, MIN_WORD_LENGTH_FOR_FIELD_
+    MATCH eşiğinin altında kalan (1-2 karakterlik) parçalardı — bu, pratikte
+    ihmal edilebilir bir uç durum. Bu yüzden accuracy.py'deki
+    _generate_merge_candidates ve komşuluk (_are_neighbors, _group_into_
+    lines*) fonksiyonları da ARTIK KULLANILMIYOR.
 
     Parametreler:
       words: runner'ın ürettiği ham words listesi, örn.
@@ -631,13 +632,7 @@ def enrich_words_with_field_matches_lcs(words, fields, ascii_normalize=True):
 
     Döndürür: words listesinin AYNISI, her elemana find_best_matching_
     field_lcs'in döndürdüğü alanlar (matched_field, matched_field_value,
-    matched_substring, cer, wer, is_match) eklenmiş olarak. EK OLARAK:
-      merged_with: list[int] | None — bu kutunun en iyi eşleşmesi
-        komşularıyla BİRLEŞTİRİLEREK bulunduysa, birleştirilen diğer
-        kutuların "words" listesindeki indeksleri. Tekil eşleşme
-        yeterliyse None.
-      merged_text: str | None — birleştirilmiş halde kullanılan TAM metin.
-        Sadece merged_with doluyken anlamlıdır.
+    matched_substring, cer, wer, is_match) eklenmiş olarak.
 
     fields boşsa, bu alanlar None/1.0/False olarak eklenir.
     """
@@ -645,49 +640,14 @@ def enrich_words_with_field_matches_lcs(words, fields, ascii_normalize=True):
         empty_extra = {
             "matched_field": None, "matched_field_value": None,
             "matched_substring": None, "cer": 1.0, "wer": 1.0,
-            "is_match": False, "merged_with": None, "merged_text": None,
+            "is_match": False,
         }
         return [{**word, **empty_extra} for word in words]
 
-    # 1) Her kutu için TEKİL eşleşmeyi hesapla.
-    single_results = [
-        find_best_matching_field_lcs(word.get("text", ""), fields, ascii_normalize=ascii_normalize)
+    return [
+        {**word, **find_best_matching_field_lcs(word.get("text", ""), fields, ascii_normalize=ascii_normalize)}
         for word in words
     ]
-
-    # 2) Komşu kutu birleştirme adaylarını üret (accuracy.py'den, bbox
-    # geometrisine dayalı), her biri için de eşleşme hesapla.
-    merge_candidates = _generate_merge_candidates(words)
-    merge_results = {}  # tuple(indeksler) -> (match_result, birlesik_metin)
-    for merged_text, indices in merge_candidates:
-        match_result = find_best_matching_field_lcs(merged_text, fields, ascii_normalize=ascii_normalize)
-        merge_results[tuple(indices)] = (match_result, merged_text)
-
-    idx_to_merges = defaultdict(list)
-    for indices, (merge_result, merged_text) in merge_results.items():
-        for idx in indices:
-            idx_to_merges[idx].append((indices, merge_result, merged_text))
-
-    # 3) Her kutu için, TEKİL cer mi yoksa içinde bulunduğu en iyi BİRLEŞİK
-    # cer mi DAHA DÜŞÜK (daha iyi), ona karar ver.
-    enriched = []
-    for idx, word in enumerate(words):
-        best_result = dict(single_results[idx])
-        best_result["merged_with"] = None
-        best_result["merged_text"] = None
-        best_cer = best_result["cer"]
-
-        for indices, merge_result, merged_text in idx_to_merges[idx]:
-            if merge_result["cer"] < best_cer:
-                best_result = dict(merge_result)
-                other_indices = [i for i in indices if i != idx]
-                best_result["merged_with"] = other_indices
-                best_result["merged_text"] = merged_text
-                best_cer = merge_result["cer"]
-
-        enriched.append({**word, **best_result})
-
-    return enriched
 
 
 if __name__ == "__main__":
