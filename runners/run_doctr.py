@@ -223,9 +223,9 @@ def run_doctr(image_path, config_path, model=None):
     words = []  # GUI/web arayüzü için: her kelimenin metni, bbox'ı ve
     # kendi confidence'ı.
 
-    for page in result.pages:
-        for block in page.blocks:
-            for line in block.lines:
+    for page_idx, page in enumerate(result.pages):
+        for block_idx, block in enumerate(page.blocks):
+            for line_idx, line in enumerate(block.lines):
                 for word in line.words:
                     geom = word.geometry
                     if isinstance(geom[0], tuple):
@@ -243,10 +243,17 @@ def run_doctr(image_path, config_path, model=None):
                         confidences.append(word.confidence)
                         word_confidence = round(word.confidence * 100, 2)
 
+                    # line_id: bu kelimenin doctr'ın KENDİ hiyerarşisindeki
+                    # (sayfa-blok-satır) kesin konumu. accuracy.py'deki
+                    # _generate_merge_candidates bu alanı görürse, bbox
+                    # geometrisinden satır TAHMİN ETMEK yerine (EasyOCR/
+                    # RapidOCR'da yaptığı gibi) doğrudan bu kesin bilgiyi
+                    # kullanır — eğik/gürültülü görsellerde daha güvenilir.
                     words.append({
                         "text": getattr(word, "value", ""),
                         "bbox": [x1, y1, x2, y2],
                         "confidence": word_confidence,
+                        "line_id": f"{page_idx}-{block_idx}-{line_idx}",
                     })
 
     # --- avg_confidence ---

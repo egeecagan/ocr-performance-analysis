@@ -145,6 +145,7 @@ def run_tesseract(image_path, config_path):
                 "text": text_found,
                 "bbox": [int(x), int(y), int(x + w), int(y + h)],
                 "confidence": round(word_confidence, 2),
+                "line_id": f"{d['block_num'][i]}-{d['par_num'][i]}-{d['line_num'][i]}",
             })
 
             # --- Highlight (Kırmızı kutular) ---

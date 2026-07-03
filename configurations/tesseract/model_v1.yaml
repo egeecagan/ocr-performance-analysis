@@ -139,10 +139,10 @@ preprocessing:
   autocrop_border: false
   autocrop_margin_ratio: 0.01
 
-  illumination_correct: true
+  illumination_correct: false
   illumination_kernel_size: 51
 
-  grayscale: true
+  grayscale: false
 
   clahe: false
   clahe_clip_limit: 2.0
