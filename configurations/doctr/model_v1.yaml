@@ -126,4 +126,4 @@ preprocessing:
 
   threshold: false
   threshold_block_size: 35
-  threshold_c: 11 
+  threshold_c: 11

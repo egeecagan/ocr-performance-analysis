@@ -22,6 +22,7 @@ from runners.lcs_cer import check_all_fields_lcs_cer_with_bbox, enrich_words_wit
 #   outputs/                            - created automatically if missing
 # =============================================================================
 BASE_DIR = Path(__file__).resolve().parent
+print(BASE_DIR)
 
 IMAGE_DIR = BASE_DIR / "inputs" / "images"
 TRUTHS_DIR = BASE_DIR / "inputs" / "truths"
