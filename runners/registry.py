@@ -97,6 +97,7 @@ def _load_doctr_model(config_path):
     extra_model_kwargs.pop("reco_arch", None)
     extra_model_kwargs.pop("pretrained", None)
     extra_model_kwargs.pop("gpu", None)
+    extra_model_kwargs.pop("font_path", None)
 
     model = ocr_predictor(det_arch=det_arch, reco_arch=reco_arch, pretrained=pretrained, **extra_model_kwargs)
     if gpu:

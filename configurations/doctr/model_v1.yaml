@@ -58,6 +58,12 @@ model_settings:
   # "auto": detect GPU automatically via torch.cuda.is_available()
   # true / false: force GPU on/off regardless of what's available
 
+  font_path: null
+  # (string, optional) Custom font path (.ttf) to be used when synthesizing
+  # pages. If not specified, the runner will automatically look for standard
+  # system fonts (e.g. arial.ttf on Windows, DejaVuSans.ttf on Linux)
+  # to prevent PIL warning messages about unable to load recommended font family.
+
   # --- Passed straight through to ocr_predictor(...) ---
   pretrained_backbone: true
   # (bool, default True) Whether to use a pretrained backbone for the
