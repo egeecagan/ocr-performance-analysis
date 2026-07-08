@@ -12,6 +12,7 @@ from runners._common import (
     load_config,
     save_preprocessed_image,
     filter_valid_kwargs,
+    resolve_font_path,
 )
 
 
@@ -76,9 +77,10 @@ def run_doctr(image_path, config_path, model=None):
     extra_model_kwargs.pop("reco_arch", None)
     extra_model_kwargs.pop("pretrained", None)
     # ocr_predictor accepts **kwargs, so filter_valid_kwargs cannot tell
-    # our own config-only fields (gpu) apart from real ocr_predictor
+    # our own config-only fields (gpu, font_path) apart from real ocr_predictor
     # parameters — remove them explicitly.
     extra_model_kwargs.pop("gpu", None)
+    extra_model_kwargs.pop("font_path", None)
 
     # --- load_time_seconds ---
     # EasyOCR/TrOCR'daki gibi burada da GERÇEK bir maliyet var:
@@ -274,7 +276,12 @@ def run_doctr(image_path, config_path, model=None):
     highlighted_img = cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0)
     cv2.imwrite(os.path.join(highlighted_dir, f"highlighted_{img_name}"), highlighted_img)
 
-    synthetic_pages = result.synthesize()
+    font_path_config = model_settings.get("font_path")
+    font_path = resolve_font_path(font_path_config)
+    if font_path:
+        synthetic_pages = result.synthesize(font_family=font_path)
+    else:
+        synthetic_pages = result.synthesize()
     cv2.imwrite(os.path.join(masked_dir, f"masked_{img_name}"), synthetic_pages[0])
 
     total_time = round(
