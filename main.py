@@ -3,7 +3,6 @@ import json
 import time
 from pathlib import Path
 import yaml
-
 from runners.registry import ENGINES
 from runners.accuracy import (
     detect_common_fields_file,
@@ -22,7 +21,6 @@ from runners.lcs_cer import check_all_fields_lcs_cer_with_bbox, enrich_words_wit
 #   outputs/                            - created automatically if missing
 # =============================================================================
 BASE_DIR = Path(__file__).resolve().parent
-print(BASE_DIR)
 
 IMAGE_DIR = BASE_DIR / "inputs" / "images"
 TRUTHS_DIR = BASE_DIR / "inputs" / "truths"
@@ -227,7 +225,4 @@ def process_pipeline(engine, model_name):
 
 
 if __name__ == "__main__":
-    process_pipeline("easyocr", "model_v1")
-    process_pipeline("tesseract", "model_v1")
-    process_pipeline("doctr", "model_v1")
-    process_pipeline("rapidocr", "model_v1")
+    process_pipeline("doctr", "model_v2")
