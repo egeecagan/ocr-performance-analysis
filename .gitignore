@@ -3,9 +3,9 @@
 # =============================================================================
 
 # Input görselleri (ehliyet/dekont gibi hassas/kişisel veriler içerebilir)
-inputs/
 inputs/images/
 inputs/truths/
+!inputs/truths/common_fields
 file_fields/
 
 # Tüm OCR çıktıları (JSON sonuçları + highlighted/masked viz görselleri)
