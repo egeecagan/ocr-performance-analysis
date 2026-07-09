@@ -35,12 +35,7 @@ DOC_TYPE_KEYWORDS = {
     "dekont": "dekont",
 }
 
-# Her belge türü için aranacak özel kelimeler (ASCII karşılıkları kullanılır)
-# Arama normalize edilmiş metin üzerinde yapıldığından Türkçe karakterler sorun çıkarmaz.
-SPECIFIC_KEYWORDS = {
-    "surucubelgesi": ["SURUCU BELGESI", "DRIVING LICENCE", "TURKIYE CUMHURIYETI"],
-    "dekont":        ["VAKIFLAR BANKASI", "DEKONT", "SAYIN", "BUYUK MUKELLEFLER"],
-}
+
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +75,35 @@ def true_ratio(booleans: list):
 
 
 # ---------------------------------------------------------------------------
+# Dinamik spesifik kelime okuyucu
+# ---------------------------------------------------------------------------
+
+def load_specific_keywords(common_fields_dir, doc_type: str) -> list:
+    """
+    common_fields/ klasöründe doc_type ile eşleşen .txt dosyasını okur.
+    Her satır bir anahtar kelimedir; '#' ile başlayan yorum satırları atlanır.
+    Boş satırlar da atlanır.
+
+    Eğer dosya yoksa uyarı basmadan sessizce boş liste döner — hata vermez.
+
+    Örnek: doc_type='dekont' → common_fields_dir/dekont.txt
+    """
+    txt_path = Path(common_fields_dir) / f"{doc_type}.txt"
+    if not txt_path.exists():
+        return []  # txt yoksa bu tür için keyword arama yapılmaz
+
+    keywords = []
+    with open(txt_path, encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            # Yorum satırını ve boş satırı atla
+            if not stripped or stripped.startswith("#"):
+                continue
+            keywords.append(stripped)
+    return keywords
+
+
+# ---------------------------------------------------------------------------
 # Özel kelime bulma başarısı (Hit Rate)
 # ---------------------------------------------------------------------------
 
@@ -98,9 +122,9 @@ def normalize_text(text: str) -> str:
     return text.translate(_TR_NORM_TABLE).lower()
 
 
-def compute_keyword_hit_rates(file_list: list, doc_type: str) -> dict:
+def compute_keyword_hit_rates(file_list: list, doc_type: str, common_fields_dir) -> dict:
     """
-    Belge türüne ait özel kelimelerin dosyalar içindeki
+    Belge türüne ait .txt dosyasından okunan özel kelimelerin dosyalar içindeki
     bulunma oranını hesaplar (0.0–100.0 yüzde olarak).
 
     Arama, hem 'text' hem 'raw_text' alanında yapılır;
@@ -108,8 +132,9 @@ def compute_keyword_hit_rates(file_list: list, doc_type: str) -> dict:
 
     Döner:
         { "KELIME": 75.0, ... }  (yüzde 0–100 arası float)
+        Txt yoksa: {}  (boş sözlük)
     """
-    keywords = SPECIFIC_KEYWORDS.get(doc_type, [])
+    keywords = load_specific_keywords(common_fields_dir, doc_type)
     if not keywords or not file_list:
         return {}
 
@@ -136,7 +161,9 @@ def compute_keyword_hit_rates(file_list: list, doc_type: str) -> dict:
 
     total = len(file_list)
     return {
-        kw: round(hit_counts[kw] / total * 100, 2)
+        # Key olarak normalize edilmiş (ASCII) üst harf versiyonu kullanılır
+        # Böylece JSON'da 'Ü' gibi Türkçe karakterler çıkmaz.
+        normalize_text(kw).upper(): round(hit_counts[kw] / total * 100, 2)
         for kw in keywords
     }
 
@@ -360,7 +387,7 @@ def aggregate_common_fields(common_parts: list) -> dict:
     }
 
 
-def compute_surucubelgesi_metrics(file_list: list) -> dict:
+def compute_surucubelgesi_metrics(file_list: list, common_fields_dir) -> dict:
     """
     Sürücü belgesi dosyaları için metrikleri hesaplar.
     """
@@ -394,11 +421,11 @@ def compute_surucubelgesi_metrics(file_list: list) -> dict:
         "avg_field_match_ratio"        : avg(all_fmr),
         "is_match_true_ratio"          : true_ratio(all_is_match),
         "common_fields"                : aggregate_common_fields(common_parts),
-        "specific_keyword_success_rates": compute_keyword_hit_rates(file_list, "surucubelgesi"),
+        "specific_keyword_success_rates": compute_keyword_hit_rates(file_list, "surucubelgesi", common_fields_dir),
     }
 
 
-def compute_dekont_metrics(file_list: list) -> dict:
+def compute_dekont_metrics(file_list: list, common_fields_dir) -> dict:
     """
     Dekont dosyaları için metrikleri hesaplar.
     Rapora yalnızca avg_confidence + common_fields eklenir.
@@ -419,7 +446,7 @@ def compute_dekont_metrics(file_list: list) -> dict:
         "avg_total_time_seconds"       : avg(all_time),
         "avg_confidence"               : avg(all_conf),
         "common_fields"                : aggregate_common_fields(common_parts),
-        "specific_keyword_success_rates": compute_keyword_hit_rates(file_list, "dekont"),
+        "specific_keyword_success_rates": compute_keyword_hit_rates(file_list, "dekont", common_fields_dir),
     }
 
 
@@ -427,9 +454,22 @@ def compute_dekont_metrics(file_list: list) -> dict:
 # Ana fonksiyon
 # ---------------------------------------------------------------------------
 
-def generate_report(outputs_dir: str = "outputs") -> None:
+def generate_report(
+    outputs_dir: str = "outputs",
+    common_fields_dir: str = None,
+    models_to_process: list = None,
+) -> None:
     """
     outputs/ dizinini tarar ve comparison_report.json üretir.
+
+    Parametreler:
+        outputs_dir        : Modellerin JSON çıktılarının bulunduğu ana klasör.
+        common_fields_dir  : Belge türü başına keyword listelerini içeren .txt
+                             dosyalarının bulunduğu klasör.
+                             None geçilirse keyword arama yapılmaz.
+        models_to_process  : [(engine, model_name), ...] şekilde işlenecek
+                             modellerin listesi. None ise outputs/ altındaki
+                             tüm modeller dahil edilir.
 
     Beklenen yapı:
         outputs/
@@ -444,6 +484,17 @@ def generate_report(outputs_dir: str = "outputs") -> None:
             "Scripti 'outputs/' klasörünün bir üst dizininden çalıştırın."
         )
 
+    # Eski raporu sil (her çalışmada sıfırdan başla)
+    out_path = base / "comparison_report.json"
+    if out_path.exists():
+        out_path.unlink()
+        print("[REPORT] Eski rapor silindi, sifirdan uretiliyor...")
+
+    # İşlenecek model kümesini normalize et: {(engine, version), ...}
+    allowed_models = None
+    if models_to_process is not None:
+        allowed_models = {(e, m) for e, m in models_to_process}
+
     # index[doc_type][model_label] = [Path, ...]
     index: dict = defaultdict(lambda: defaultdict(list))
 
@@ -453,6 +504,12 @@ def generate_report(outputs_dir: str = "outputs") -> None:
         for version_dir in sorted(model_dir.iterdir()):
             if not version_dir.is_dir():
                 continue
+
+            # Sadece bu çalışmada belirtilen modelleri al
+            if allowed_models is not None:
+                if (model_dir.name, version_dir.name) not in allowed_models:
+                    continue
+
             model_label = f"{model_dir.name}/{version_dir.name}"
             for jf in sorted(version_dir.glob("*.json")):
                 doc_type = determine_doc_type(jf.stem)
@@ -461,7 +518,7 @@ def generate_report(outputs_dir: str = "outputs") -> None:
                 index[doc_type][model_label].append(jf)
 
     if not index:
-        print("Hiç geçerli JSON bulunamadi.")
+        print("Hic gecerli JSON bulunamadi.")
         return
 
     report: dict = {}
@@ -475,16 +532,14 @@ def generate_report(outputs_dir: str = "outputs") -> None:
             print(f"  {model_label}  ({len(file_list)} dosya)")
 
             if doc_type == "surucubelgesi":
-                metrics = compute_surucubelgesi_metrics(file_list)
+                metrics = compute_surucubelgesi_metrics(file_list, common_fields_dir)
             elif doc_type == "dekont":
-                metrics = compute_dekont_metrics(file_list)
+                metrics = compute_dekont_metrics(file_list, common_fields_dir)
             else:
-                # Gelecekte eklenebilecek türler için genel fallback
                 metrics = {"file_count": len(file_list), "note": "hesaplama kurali tanimli degil"}
 
             report[doc_type][model_label] = metrics
 
-            # Konsol özeti
             cf = metrics.get("common_fields", {})
             print(
                 f"    avg_conf={metrics.get('avg_confidence')}  "
@@ -492,7 +547,6 @@ def generate_report(outputs_dir: str = "outputs") -> None:
                 f"cf_found%={cf.get('found_true_ratio')}"
             )
 
-    out_path = base / "comparison_report.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=True, indent=4)
 
@@ -504,6 +558,11 @@ def generate_report(outputs_dir: str = "outputs") -> None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    script_dir  = os.path.dirname(os.path.abspath(__file__))
-    outputs_dir = os.path.join(script_dir, "outputs")
-    generate_report(outputs_dir=outputs_dir)
+    script_dir        = os.path.dirname(os.path.abspath(__file__))
+    outputs_dir       = os.path.join(script_dir, "outputs")
+    common_fields_dir = os.path.join(script_dir, "inputs", "truths", "common_fields")
+    generate_report(
+        outputs_dir=outputs_dir,
+        common_fields_dir=common_fields_dir,
+        models_to_process=None,   # None = outputs/ altındaki tüm modeller
+    )

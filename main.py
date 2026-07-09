@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import shutil
 from pathlib import Path
 import yaml
 from runners.registry import ENGINES
@@ -9,6 +10,7 @@ from runners.accuracy import (
     load_common_fields,
 )
 from runners.lcs_cer import check_all_fields_lcs_cer_with_bbox, enrich_words_with_field_matches_lcs
+from generate_report import generate_report
 
 # =============================================================================
 # Base paths
@@ -27,6 +29,8 @@ TRUTHS_DIR = BASE_DIR / "inputs" / "truths"
 COMMON_FIELDS_DIR = BASE_DIR / "inputs" / "truths" / "common_fields"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 CONFIGS_DIR = BASE_DIR / "configurations"
+
+PROCESSED_MODELS = []
 
 
 def load_ground_truth(img_name, truths_dir=TRUTHS_DIR):
@@ -223,6 +227,22 @@ def process_pipeline(engine, model_name):
             f"Common: {output_data['common_fields_found']}/{output_data['common_fields_total']}"
         )
 
+    PROCESSED_MODELS.append((engine, model_name))
+
 
 if __name__ == "__main__":
-    process_pipeline("doctr", "model_v2")
+    # Eski tüm çıktıları fiziksel olarak tamamen sil (Clean slate)
+    if OUTPUTS_DIR.exists():
+        print(f"[CLEANUP] outputs/ klasoru tamamen siliniyor...")
+        shutil.rmtree(OUTPUTS_DIR)
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    process_pipeline("tesseract", "model_v1")
+
+    # Tüm pipeline'lar bittikten sonra karşılaştırma raporunu otomatik üret
+    print("\n[REPORT] Karsilastirma raporu olusturuluyor...")
+    generate_report(
+        outputs_dir=str(OUTPUTS_DIR),
+        common_fields_dir=str(COMMON_FIELDS_DIR),
+        models_to_process=PROCESSED_MODELS,
+    )
