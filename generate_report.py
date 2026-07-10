@@ -1,23 +1,44 @@
 """
 OCR Karşılaştırmalı Rapor Üretici  (v2)
 =========================================
-Belge türüne göre farklı hesaplama kuralları uygular:
+Bu script, `outputs/` klasörü altında modellere göre gruplanmış OCR
+çıktı JSON'larını okur, belge türüne göre performans metriklerini
+hesaplar ve tek bir `comparison_report.json` dosyasında toplar.
 
-  surucubelgesi
-    - Filtreleme AÇIK  : matched_field + matched_field_value + matched_substring
-                         üçü birden null olan word objeleri hesaplamalara dahil edilmez.
+Amaç: farklı OCR modellerinin ve farklı versiyonlarının aynı belge seti
+üzerindeki başarısını (confidence, CER, WER, alan eşleşme oranı vb.)
+yan yana karşılaştırabilmek.
+
+Belge türüne göre hesaplama kuralları birbirinden farklıdır, çünkü
+her belge türünün ground-truth (doğruluk) verisi farklı şekilde
+etiketlenmiştir:
+
+  surucubelgesi  (sürücü belgesi)
+    - Filtreleme AÇIK  : Bir word (tekil kelime) objesi ancak matched_field,
+                         matched_field_value veya matched_substring
+                         alanlarından EN AZ BİRİ doluysa (üçü birden
+                         null DEĞİLSE) hesaba katılır. Bu üçü birden
+                         null olan word'ler, beklenen alanlarla hiç
+                         eşleşmemiş "gürültü" kabul edilir ve atlanır.
     - Metrikler        : avg_confidence, avg_cer, avg_wer,
-                         avg_field_match_ratio, is_match_true_ratio, valid_word_count
+                         avg_field_match_ratio, is_match_true_ratio,
+                         valid_word_count
     - common_fields    : avg_cer, avg_wer, avg_common_field_match_ratio,
                          avg_common_field_confidence, found_true_ratio
 
   dekont
-    - Filtreleme KAPALI: Tüm word objeleri hesaba katılır.
-    - Metrikler        : Sadece avg_confidence  (diğerleri rapora yazılmaz)
+    - Filtreleme KAPALI: Sürücü belgesinden farklı olarak burada
+                         ground-truth eşleştirmesi word bazlı
+                         yapılmadığından, TÜM word objeleri filtresiz
+                         şekilde hesaba katılır.
+    - Metrikler        : Sadece avg_confidence  (CER/WER gibi diğer
+                         metrikler bu belge türü için anlamlı
+                         olmadığından rapora yazılmaz)
     - common_fields    : Yukarıdakiyle aynı yapı
 
-  Her iki tür için de:
-    - avg_total_time_seconds  (dosya başına ortalama işlem süresi)
+  Her iki tür için de ortak olarak hesaplanır:
+    - avg_total_time_seconds  (dosya başına ortalama işlem süresi,
+                               modellerin hızını karşılaştırmak için)
 """
 
 import json
@@ -27,32 +48,36 @@ from collections import defaultdict
 
 
 # ---------------------------------------------------------------------------
-# Sabitler
-# ---------------------------------------------------------------------------
-
-DOC_TYPE_KEYWORDS = {
-    "surucubelgesi": "surucubelgesi",
-    "dekont": "dekont",
-}
-
-
-
-
-# ---------------------------------------------------------------------------
 # Genel yardımcı fonksiyonlar
 # ---------------------------------------------------------------------------
 
 def determine_doc_type(stem: str):
-    """Dosya adından belge türünü saptar. Bilinmiyorsa None döner."""
-    lower = stem.lower()
-    for keyword, doc_type in DOC_TYPE_KEYWORDS.items():
-        if keyword in lower:
-            return doc_type
-    return None
+    """
+    Dosya adından (uzantısız, örn. "dekont_003") belge türünü saptar.
+
+    İsimlendirme kuralı: belge türü isminin kendisinde alt tire (_)
+    BULUNMAZ; belge türü ismi ile dosya numarası arasına tek bir alt
+    tire konur (örn. "dekont_003" -> "dekont", "surucubelgesi_012" ->
+    "surucubelgesi", "fatura_7" -> "fatura"). Belge türü, dolayısıyla
+    dosya adının ilk alt tireden ÖNCEKİ kısmıdır.
+
+    Bu yapı tamamen geneldir: sabit bir anahtar kelime listesine
+    (DOC_TYPE_KEYWORDS vb.) ihtiyaç yoktur — fatura, banka, dekont,
+    surucubelgesi ya da yeni eklenecek herhangi bir belge türü otomatik
+    olarak tanınır. Aynı isimlendirme, common_fields klasöründeki
+    "<belge_turu>_c.txt" dosyalarıyla eşleştirme için de kullanılır
+    (bkz. load_specific_keywords).
+    """
+    return stem.split("_", 1)[0].lower()
 
 
 def safe_float(value):
-    """None-safe float dönüşümü; dönüştürülemezse None döner."""
+    """
+    Bir değeri float'a çevirir; None, eksik ya da sayıya çevrilemeyen
+    (örn. boş string, hatalı tip) değerlerde exception fırlatmak yerine
+    None döner. Böylece eksik/bozuk veri içeren JSON alanları,
+    ortalama hesaplarını bozmadan (avg fonksiyonunda) sessizce elenir.
+    """
     if value is None:
         return None
     try:
@@ -62,13 +87,24 @@ def safe_float(value):
 
 
 def avg(values: list):
-    """Sayı listesinin aritmetik ortalaması; boşsa None."""
+    """
+    Bir sayı listesinin aritmetik ortalamasını 6 ondalık basamağa
+    yuvarlayarak döner. Listedeki None değerler ortalamaya dahil
+    edilmeden önce elenir; listede hiç geçerli (None olmayan) değer
+    yoksa None döner (0 değil — "veri yok" ile "değer sıfır" ayrımını
+    korumak için).
+    """
     clean = [v for v in values if v is not None]
     return round(sum(clean) / len(clean), 6) if clean else None
 
 
 def true_ratio(booleans: list):
-    """Boolean listesinde True oranı (0.0–1.0); boşsa None."""
+    """
+    Boolean listesindeki True değerlerin oranını (0.0–1.0 arası)
+    döner. Örn. is_match_true_ratio veya found_true_ratio gibi
+    "ne kadarı başarılı/eşleşti" metrikleri için kullanılır.
+    Liste boşsa None döner.
+    """
     if not booleans:
         return None
     return round(sum(1 for b in booleans if b is True) / len(booleans), 6)
@@ -80,15 +116,23 @@ def true_ratio(booleans: list):
 
 def load_specific_keywords(common_fields_dir, doc_type: str) -> list:
     """
-    common_fields/ klasöründe doc_type ile eşleşen .txt dosyasını okur.
-    Her satır bir anahtar kelimedir; '#' ile başlayan yorum satırları atlanır.
-    Boş satırlar da atlanır.
+    Belge türüne özel aranacak anahtar kelimeleri, common_fields_dir
+    klasöründeki "<doc_type>_c.txt" dosyasından okur (örn. doc_type=
+    'dekont' için common_fields_dir/dekont_c.txt). Bu isimlendirme,
+    determine_doc_type'ın dosya adından çıkardığı belge türü ile
+    birebir eşleşir, böylece herhangi bir belge türü için ek kod
+    yazmadan sadece doğru adla bir .txt dosyası eklemek yeterlidir.
 
-    Eğer dosya yoksa uyarı basmadan sessizce boş liste döner — hata vermez.
+    Dosya formatı:
+        - Her satır bir anahtar kelime olarak kabul edilir.
+        - '#' ile başlayan satırlar yorum kabul edilip atlanır.
+        - Boş satırlar atlanır.
 
-    Örnek: doc_type='dekont' → common_fields_dir/dekont.txt
+    Bu .txt dosyaları opsiyoneldir: belirtilen doc_type için dosya
+    yoksa hata/uyarı vermeden sessizce boş liste döner, yani bu belge
+    türü için özel kelime arama (hit-rate) hesabı yapılmaz.
     """
-    txt_path = Path(common_fields_dir) / f"{doc_type}.txt"
+    txt_path = Path(common_fields_dir) / f"{doc_type}_c.txt"
     if not txt_path.exists():
         return []  # txt yoksa bu tür için keyword arama yapılmaz
 
@@ -96,7 +140,7 @@ def load_specific_keywords(common_fields_dir, doc_type: str) -> list:
     with open(txt_path, encoding="utf-8") as f:
         for line in f:
             stripped = line.strip()
-            # Yorum satırını ve boş satırı atla
+            # Yorum ('#...') ve boş satırları listeye ekleme
             if not stripped or stripped.startswith("#"):
                 continue
             keywords.append(stripped)
@@ -107,6 +151,11 @@ def load_specific_keywords(common_fields_dir, doc_type: str) -> list:
 # Özel kelime bulma başarısı (Hit Rate)
 # ---------------------------------------------------------------------------
 
+# Türkçe'ye özgü karakterlerin ASCII karşılıklarına eşlemesi.
+# OCR motorları bazen "İ/I", "Ş/S" gibi Türkçe karakterleri yanlış ya da
+# tutarsız tanıyabildiği için, karşılaştırma öncesi hem beklenen kelimeyi
+# hem de OCR metnini bu tabloyla normalize ederek "sahte farkları" ortadan
+# kaldırıyoruz (örn. "üçüncü" ile "ucuncu" aynı kabul edilsin).
 _TR_NORM_TABLE = str.maketrans(
     "ŞşĞğÜüÖöÇçİıÂâÎîÛû",
     "SsGgUuOoCcIiAaIiUu"
@@ -114,25 +163,34 @@ _TR_NORM_TABLE = str.maketrans(
 
 def normalize_text(text: str) -> str:
     """
-    Metni küçük harfe çevirir ve Türkçe karakterleri
-    karşılıklarına dönüştürür (ş→s, ğ→g, ü→u vb.).
-    Bu sayede OCR çıktısındaki karakter farklılıklarına rağmen
-    eşleşme yapılabilir.
+    Metni küçük harfe çevirir ve Türkçe karakterleri ASCII
+    karşılıklarına dönüştürür (ş→s, ğ→g, ü→u, İ→i vb.).
+    Bu sayede OCR çıktısındaki karakter kodlama / büyük-küçük harf
+    farklılıklarına rağmen anahtar kelime eşleşmesi güvenilir şekilde
+    yapılabilir.
     """
     return text.translate(_TR_NORM_TABLE).lower()
 
 
 def compute_keyword_hit_rates(file_list: list, doc_type: str, common_fields_dir) -> dict:
     """
-    Belge türüne ait .txt dosyasından okunan özel kelimelerin dosyalar içindeki
-    bulunma oranını hesaplar (0.0–100.0 yüzde olarak).
+    Belge türüne özel önemli kelimelerin (örn. "EHLİYET", "BANKA ADI" gibi
+    her belgede mutlaka geçmesi beklenen ifadelerin), model çıktılarının
+    kaçında doğru şekilde tanındığını yüzde olarak hesaplar.
 
-    Arama, hem 'text' hem 'raw_text' alanında yapılır;
-    Türkçe karakter normalizasyonu uygulanır.
+    Çalışma mantığı:
+        1. doc_type için .txt dosyasından beklenen kelime listesi okunur
+           (bkz. load_specific_keywords).
+        2. file_list'teki her JSON dosyasında, hem 'text' hem 'raw_text'
+           alanları birleştirilip Türkçe karakter normalizasyonu
+           uygulanarak arama kaynağı oluşturulur.
+        3. Her kelime için, o kelimenin geçtiği dosya sayısının toplam
+           dosya sayısına oranı hesaplanır.
 
     Döner:
-        { "KELIME": 75.0, ... }  (yüzde 0–100 arası float)
-        Txt yoksa: {}  (boş sözlük)
+        { "KELIME": 75.0, ... }
+        Yani "KELIME" dosyaların %75'inde bulunmuş demektir.
+        Belge türü için .txt dosyası yoksa veya file_list boşsa: {}
     """
     keywords = load_specific_keywords(common_fields_dir, doc_type)
     if not keywords or not file_list:
@@ -161,8 +219,9 @@ def compute_keyword_hit_rates(file_list: list, doc_type: str, common_fields_dir)
 
     total = len(file_list)
     return {
-        # Key olarak normalize edilmiş (ASCII) üst harf versiyonu kullanılır
-        # Böylece JSON'da 'Ü' gibi Türkçe karakterler çıkmaz.
+        # Rapordaki key olarak normalize edilmiş (ASCII, büyük harf)
+        # versiyon kullanılır; böylece çıktı JSON'unda 'Ü' gibi Türkçe
+        # karakterler yerine okunması kolay ASCII anahtarlar görünür.
         normalize_text(kw).upper(): round(hit_counts[kw] / total * 100, 2)
         for kw in keywords
     }
@@ -174,15 +233,21 @@ def compute_keyword_hit_rates(file_list: list, doc_type: str, common_fields_dir)
 
 def extract_common_fields_data(data: dict) -> dict:
     """
-    Bir belge JSON'undan common_field_results bölümündeki
-    ham verileri çıkarır.
+    "common_field"lar, belge türünden bağımsız olarak her belgede ortak
+    bulunan alanlardır (örn. tarih, belge no gibi). Bu fonksiyon, tek bir
+    belge JSON'unun common_field_results bölümünden bu alanlara ait ham
+    performans verilerini çıkarır (henüz ortalaması alınmamış, ham liste
+    halinde) — asıl ortalama hesabı aggregate_common_fields'ta yapılır.
 
     Dönen:
         cer_list              : common field başına CER değerleri
         wer_list              : common field başına WER değerleri
         found_list            : common field başına found bool değerleri
+                                 (alan belgede bulunabildi mi?)
         common_fmr            : belge düzeyi common_field_match_ratio (ya float ya None)
-        confidence_list       : common field'lara denk gelen word confidence'ları
+        confidence_list       : matched_word_indices üzerinden bu common
+                                 field'lara karşılık gelen word'lerin
+                                 confidence değerleri
     """
     words = data.get("words", [])
     cfr   = data.get("common_field_results", {})
@@ -208,7 +273,9 @@ def extract_common_fields_data(data: dict) -> dict:
             if isinstance(f, bool):
                 found_list.append(f)
 
-            # Confidence: matched_word_indices üzerinden word listesinden çek
+            # Bu common field'ın hangi word'lere karşılık geldiği
+            # matched_word_indices içinde tutulur; o index'lerdeki
+            # word'lerin confidence değerlerini topluyoruz.
             indices = field_data.get("matched_word_indices")
             if isinstance(indices, list) and words:
                 for idx in indices:
@@ -234,9 +301,13 @@ def extract_common_fields_data(data: dict) -> dict:
 
 def is_word_valid_surucubelgesi(word: dict) -> bool:
     """
-    Sürücü belgesi filtreleme kuralı:
-    matched_field, matched_field_value, matched_substring
-    üçü birden null ise geçersiz → False döner.
+    Sürücü belgesi filtreleme kuralı.
+
+    Bir word'ün geçerli sayılması için matched_field,
+    matched_field_value veya matched_substring alanlarından en az
+    biri dolu olmalıdır. Üçü de null ise, bu word ground-truth'taki
+    hiçbir beklenen alanla eşleştirilememiş demektir (örn. sayfadaki
+    alakasız/gürültü metin) ve metriklerden dışlanır.
     """
     return not (
         word.get("matched_field")       is None and
@@ -247,7 +318,14 @@ def is_word_valid_surucubelgesi(word: dict) -> bool:
 
 def process_surucubelgesi(filepath: Path) -> dict:
     """
-    Sürücü belgesi JSON'undan ham verileri çıkarır.
+    Tek bir sürücü belgesi JSON'unu okuyup ham (henüz ortalaması
+    alınmamış) performans verilerini çıkarır. is_word_valid_surucubelgesi
+    filtresine takılan word'ler bu listelere hiç eklenmez.
+
+    Dosya okunamaz/bozuksa (JSON hatası, eksik dosya vb.) uyarı basılır
+    ve tüm listeler boş olan bir "empty" sonuç döndürülür — script bu
+    tek dosya yüzünden çökmez, o dosya sadece rapora katkı vermez.
+
     Dönen anahtarlar:
         conf_list, cer_list, wer_list, is_match_list,
         field_match_ratio,
@@ -314,8 +392,13 @@ def process_surucubelgesi(filepath: Path) -> dict:
 
 def process_dekont(filepath: Path) -> dict:
     """
-    Dekont JSON'undan ham verileri çıkarır.
-    Filtreleme UYGULANMAZ – tüm word'ler confidence hesabına dahil edilir.
+    Tek bir dekont JSON'unu okuyup ham performans verilerini çıkarır.
+
+    surucubelgesi'nden farklı olarak burada word bazlı bir eşleştirme
+    filtresi YOKTUR — sayfadaki tüm word'lerin confidence değeri
+    hesaba katılır. Dosya okunamazsa uyarı basılır ve boş bir "empty"
+    sonuç döndürülür.
+
     Dönen anahtarlar:
         conf_list, total_time,
         common: { cer_list, wer_list, found_list, common_fmr, confidence_list }
@@ -360,8 +443,14 @@ def process_dekont(filepath: Path) -> dict:
 
 def aggregate_common_fields(common_parts: list) -> dict:
     """
-    Birden fazla dosyadan gelen common field ham verilerini birleştirir
-    ve 'common_fields' metrik objesini döner.
+    Bir model/belge türü grubundaki tüm dosyalardan (extract_common_fields_data
+    ile toplanmış) ham common-field listelerini tek bir havuzda birleştirir
+    ve bu havuz üzerinden nihai 'common_fields' metrik objesini üretir.
+
+    Her dosyanın kendi ortalaması alınmaz; tüm değerler önce
+    birleştirilir, ortalama en sonda bir kez hesaplanır (mikro
+    ortalama). Böylece daha çok common field içeren dosyalar
+    ortalamada doğal olarak daha fazla ağırlığa sahip olur.
     """
     all_cer   = []
     all_wer   = []
@@ -389,7 +478,11 @@ def aggregate_common_fields(common_parts: list) -> dict:
 
 def compute_surucubelgesi_metrics(file_list: list, common_fields_dir) -> dict:
     """
-    Sürücü belgesi dosyaları için metrikleri hesaplar.
+    Aynı model/versiyona ait tüm sürücü belgesi dosyalarını
+    (file_list) tek tek process_surucubelgesi ile işler, ham verileri
+    biriktirir ve bu modelin nihai özet metriklerini (rapor bloğunu)
+    üretir. Modeller arası karşılaştırma bu fonksiyonun döndürdüğü
+    obje üzerinden yapılır.
     """
     all_conf      = []
     all_cer       = []
@@ -427,8 +520,12 @@ def compute_surucubelgesi_metrics(file_list: list, common_fields_dir) -> dict:
 
 def compute_dekont_metrics(file_list: list, common_fields_dir) -> dict:
     """
-    Dekont dosyaları için metrikleri hesaplar.
-    Rapora yalnızca avg_confidence + common_fields eklenir.
+    Aynı model/versiyona ait tüm dekont dosyalarını (file_list) tek tek
+    process_dekont ile işler ve nihai özet metrikleri üretir.
+
+    surucubelgesi'nin aksine CER/WER/field_match_ratio gibi metrikler
+    dekont için ground-truth'ta anlamlı şekilde tutulmadığından rapora
+    dahil edilmez; yalnızca avg_confidence ve common_fields eklenir.
     """
     all_conf     = []
     all_time     = []
@@ -460,22 +557,31 @@ def generate_report(
     models_to_process: list = None,
 ) -> None:
     """
-    outputs/ dizinini tarar ve comparison_report.json üretir.
+    outputs/ dizinini baştan sona tarar, her (model, versiyon, belge türü)
+    kombinasyonu için performans metriklerini hesaplar ve hepsini tek bir
+    comparison_report.json dosyasında toplayıp diske yazar.
 
     Parametreler:
         outputs_dir        : Modellerin JSON çıktılarının bulunduğu ana klasör.
-        common_fields_dir  : Belge türü başına keyword listelerini içeren .txt
-                             dosyalarının bulunduğu klasör.
+        common_fields_dir  : Belge türü başına özel anahtar-kelime listelerini
+                             içeren .txt dosyalarının bulunduğu klasör
+                             (bkz. load_specific_keywords).
                              None geçilirse keyword arama yapılmaz.
-        models_to_process  : [(engine, model_name), ...] şekilde işlenecek
-                             modellerin listesi. None ise outputs/ altındaki
-                             tüm modeller dahil edilir.
+        models_to_process  : [(engine, model_name), ...] şekilde SADECE
+                             işlenecek modellerin listesi (örn. belirli bir
+                             modeli yeniden çalıştırıp raporu güncellemek
+                             için). None ise outputs/ altındaki tüm
+                             modeller dahil edilir.
 
-    Beklenen yapı:
+    Beklenen klasör yapısı:
         outputs/
             <model_adi>/
                 <versiyon>/
                     dekont.json, dekont2.json, surucubelgesi1.json, ...
+
+    Not: Fonksiyon her çalıştığında önce varsa eski comparison_report.json
+    silinir, böylece rapor her seferinde sıfırdan ve tutarlı şekilde
+    üretilir (eski/artık verinin rapora karışması engellenir).
     """
     base = Path(outputs_dir)
     if not base.is_dir():
@@ -490,12 +596,14 @@ def generate_report(
         out_path.unlink()
         print("[REPORT] Eski rapor silindi, sifirdan uretiliyor...")
 
-    # İşlenecek model kümesini normalize et: {(engine, version), ...}
+    # models_to_process listesini hızlı üyelik kontrolü için set'e çevir:
+    # {(engine, version), ...}
     allowed_models = None
     if models_to_process is not None:
         allowed_models = {(e, m) for e, m in models_to_process}
 
-    # index[doc_type][model_label] = [Path, ...]
+    # Dosyaları tarama sırasında belge türüne ve modele göre gruplandığı
+    # ara veri yapısı: index[doc_type][model_label] = [Path, Path, ...]
     index: dict = defaultdict(lambda: defaultdict(list))
 
     for model_dir in sorted(base.iterdir()):
@@ -505,7 +613,8 @@ def generate_report(
             if not version_dir.is_dir():
                 continue
 
-            # Sadece bu çalışmada belirtilen modelleri al
+            # models_to_process belirtildiyse, listede olmayan
+            # model/versiyon kombinasyonlarını atla
             if allowed_models is not None:
                 if (model_dir.name, version_dir.name) not in allowed_models:
                     continue
@@ -558,6 +667,9 @@ def generate_report(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Yollar, script'in çalıştırıldığı dizinden değil script'in kendi
+    # konumundan türetilir; böylece script başka bir dizinden
+    # çağrılsa bile doğru outputs/ ve common_fields/ klasörlerini bulur.
     script_dir        = os.path.dirname(os.path.abspath(__file__))
     outputs_dir       = os.path.join(script_dir, "outputs")
     common_fields_dir = os.path.join(script_dir, "inputs", "truths", "common_fields")

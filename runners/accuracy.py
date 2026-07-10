@@ -185,30 +185,26 @@ def detect_common_fields_file(img_name, common_fields_dir):
     Bir görsel dosya adına bakıp, hangi "ortak kelimeler" .txt dosyasının
     kullanılması gerektiğini OTOMATİK tespit eder.
 
-    Yöntem: common_fields_dir altındaki HER .txt dosyasının adını (uzantısız,
-    örn. "dekont", "surucu_belgesi"), görsel dosya adının (küçük harfe
-    çevrilmiş, alt çizgiler kaldırılmış hali) İÇİNDE arar. Örnek:
-      img_name = "dekont4.png"           -> "dekont" .txt adında geçiyor mu? EVET -> dekont.txt seçilir
-      img_name = "surucubelgesi1.png"    -> "surucu_belgesi" -> alt çizgisiz "surucubelgesi" görsel adında geçiyor mu? EVET -> surucu_belgesi.txt
+    İsimlendirme kuralı: belge türü isminin kendisinde alt tire (_)
+    BULUNMAZ; belge türü ismi ile dosya numarası arasına tek bir alt
+    tire konur (örn. "dekont_4.png" -> "dekont", "surucubelgesi_1.png"
+    -> "surucubelgesi", "fatura_7.png" -> "fatura"). Belge türü,
+    dolayısıyla dosya adının ilk alt tireden ÖNCEKİ kısmıdır — bkz.
+    generate_report.py'deki determine_doc_type ile aynı mantık.
 
-    Birden fazla dosya adı eşleşirse (nadir, isimlendirme çakışması), İLK
-    eşleşen (alfabetik sırada) kullanılır — bu durumda dosya adlarınızı
-    daha belirgin seçmeniz önerilir.
+    Bu belge türü adıyla birebir aynı adı taşıyan "<belge_turu>_c.txt"
+    dosyası aranır (örn. "dekont" -> "dekont_c.txt"). Böylece herhangi
+    bir belge türü (fatura, banka, dekont, surucubelgesi, ...) için ek
+    kod yazmadan sadece doğru adla bir .txt dosyası eklemek yeterlidir.
 
-    Hiçbir dosya eşleşmezse None döner — main.py bu durumda ortak kelime
-    kontrolünü atlar (sorun değil, sadece o görsel için bu kontrol
-    yapılmaz).
+    Dosya yoksa None döner — main.py bu durumda ortak kelime kontrolünü
+    atlar (sorun değil, sadece o görsel için bu kontrol yapılmaz).
     """
     common_fields_dir = Path(common_fields_dir)
     if not common_fields_dir.exists():
         return None
 
-    img_stem_normalized = Path(img_name).stem.lower().replace("_", "")
+    doc_type = Path(img_name).stem.split("_", 1)[0].lower()
 
-    txt_files = sorted(common_fields_dir.glob("*.txt"))
-    for txt_file in txt_files:
-        file_key = txt_file.stem.lower().replace("_", "")
-        if file_key in img_stem_normalized:
-            return txt_file
-
-    return None
+    txt_file = common_fields_dir / f"{doc_type}_c.txt"
+    return txt_file if txt_file.exists() else None
