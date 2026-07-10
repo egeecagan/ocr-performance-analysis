@@ -41,5 +41,5 @@ onnxruntime
 # --- PaddleOCR ---
 # NOT: paddlepaddle Apple Silicon Mac'te desteklenmeyebilir — bu durumda
 # bu iki satırı yorum satırı yapıp PaddleOCR'ı Docker üzerinden çalıştırın.
-# paddleocr==3.7.0
-# paddlepaddle
+paddleocr==3.7.0
+paddlepaddle

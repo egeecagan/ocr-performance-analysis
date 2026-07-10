@@ -57,7 +57,7 @@ def load_ground_truth(img_name, truths_dir=TRUTHS_DIR):
     return None, False
 
 
-def process_single_image(img_path: str, engine: str, model_name: str) -> dict:
+def process_single_image(img_path: str, engine: str, model_name: str, original_name: str = None) -> dict:
     """
     API tarafindan cagrilir. Tek bir gorsel dosyasini isler ve
     OCR cikti sozlugunu (words, bbox, metrikler vb.) geri dondurur.
@@ -66,6 +66,7 @@ def process_single_image(img_path: str, engine: str, model_name: str) -> dict:
         img_path   : Gorselin tam dosya yolu (str)
         engine     : Kullanilacak OCR motoru (ornek: 'tesseract')
         model_name : Model versiyonu (ornek: 'model_v1')
+        original_name : Gorselin orijinal dosya adi (str, opsiyonel)
 
     Doner:
         OCR sonuc sozlugu (words, confidence, field_results ...)
@@ -102,7 +103,7 @@ def process_single_image(img_path: str, engine: str, model_name: str) -> dict:
     except Exception as e:
         return {"error": f"OCR islemi basarisiz: {e}"}
 
-    img_name = Path(img_path).name
+    img_name = original_name if original_name else Path(img_path).name
 
     # Ground truth (varsa)
     ground_truth_data, has_ground_truth = load_ground_truth(img_name)

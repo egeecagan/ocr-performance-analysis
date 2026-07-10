@@ -27,7 +27,20 @@ export default function Scanner() {
   const [error,      setError]      = useState(null)
   const [dragOver,   setDragOver]   = useState(false)
 
+  const [clearStatus, setClearStatus] = useState(null)
+
   const fileInputRef = useRef(null)
+
+  const handleClearWebOutputs = async () => {
+    try {
+      await axios.post(`${API}/clear-web-outputs`)
+      setClearStatus('success')
+      setTimeout(() => setClearStatus(null), 3000)
+    } catch (err) {
+      setClearStatus('error')
+      setTimeout(() => setClearStatus(null), 3000)
+    }
+  }
 
   // ── Motor listesini yukle ─────────────────────────────────────────────────
   useEffect(() => {
@@ -93,7 +106,20 @@ export default function Scanner() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div>
-      <h2 className="section-heading">🔍 Belge Tarama ve Analiz</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <h2 className="section-heading" style={{ margin: 0 }}>🔍 Belge Tarama ve Analiz</h2>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <button
+            className="btn btn-ghost"
+            onClick={handleClearWebOutputs}
+            style={{ borderColor: 'var(--red)', color: 'var(--red)', fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
+          >
+            🗑️ Tüm Web Çıktılarını Temizle
+          </button>
+          {clearStatus === 'success' && <span style={{ color: 'var(--green)', fontSize: '0.85rem' }}>✓ Temizlendi</span>}
+          {clearStatus === 'error' && <span style={{ color: 'var(--red)', fontSize: '0.85rem' }}>✗ Hata oluştu</span>}
+        </div>
+      </div>
 
       {/* ── Model seçim kontrolü ── */}
       <div className="card" style={{ marginBottom: '1.5rem' }}>

@@ -68,7 +68,10 @@ def determine_doc_type(stem: str):
     "<belge_turu>_c.txt" dosyalarıyla eşleştirme için de kullanılır
     (bkz. load_specific_keywords).
     """
-    return stem.split("_", 1)[0].lower()
+    import re
+    # Hem alt tireli (surucubelgesi_1) hem de düz numaralı (surucubelgesi1)
+    # isimlendirmeleri desteklemek için dosya sonundaki rakam ve alt tireleri temizler.
+    return re.sub(r'[_0-9]+$', '', stem).lower()
 
 
 def safe_float(value):

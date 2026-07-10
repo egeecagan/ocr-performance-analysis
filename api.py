@@ -15,7 +15,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -27,6 +27,56 @@ from main import (
     CONFIGS_DIR,
 )
 from runners.registry import ENGINES
+
+WEB_OUTPUTS_DIR = BASE_DIR / "web_outputs"
+WEB_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+pipeline_status = {"status": "idle", "progress": "", "error": None}
+
+def run_full_pipeline_task():
+    global pipeline_status
+    pipeline_status["status"] = "running"
+    pipeline_status["progress"] = "Temizlik yapılıyor..."
+    pipeline_status["error"] = None
+    try:
+        import main
+        import shutil
+        from generate_report import generate_report
+        
+        # 1. Clean outputs dir
+        if main.OUTPUTS_DIR.exists():
+            shutil.rmtree(main.OUTPUTS_DIR)
+        main.OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # 2. Get all models to run
+        configs = []
+        for engine_name in main.ENGINES.keys():
+            engine_config_dir = main.CONFIGS_DIR / engine_name
+            if engine_config_dir.is_dir():
+                for p in engine_config_dir.glob("*.yaml"):
+                    configs.append((engine_name, p.stem))
+                    
+        # 3. Run process_pipeline for each model
+        processed_models = []
+        for i, (eng, mod) in enumerate(configs):
+            pipeline_status["progress"] = f"Model çalıştırılıyor ({i+1}/{len(configs)}): {eng}/{mod}..."
+            main.process_pipeline(eng, mod)
+            processed_models.append((eng, mod))
+            
+        # 4. Generate the report
+        pipeline_status["progress"] = "Karşılaştırma raporu oluşturuluyor..."
+        generate_report(
+            outputs_dir=str(main.OUTPUTS_DIR),
+            common_fields_dir=str(main.COMMON_FIELDS_DIR),
+            models_to_process=processed_models,
+        )
+        
+        pipeline_status["status"] = "success"
+        pipeline_status["progress"] = "Rapor başarıyla üretildi."
+    except Exception as e:
+        pipeline_status["status"] = "error"
+        pipeline_status["progress"] = ""
+        pipeline_status["error"] = str(e)
 
 # =============================================================================
 # Uygulama
@@ -41,7 +91,7 @@ app = FastAPI(
 # React dev server'inin (localhost:5173) isteklerine izin ver
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -84,7 +134,7 @@ def compute_single_file_metrics(data: dict, filename: str) -> dict:
         true_ratio,
     )
 
-    doc_type = determine_doc_type(filename)
+    doc_type = determine_doc_type(Path(filename).stem)
     if not doc_type:
         doc_type = "surucubelgesi"  # varsayılan
 
@@ -157,13 +207,7 @@ async def process_image(
 ):
     """
     Yuklenen gorseli secilen OCR motoru ile isler.
-
-    Doner:
-        words                : Kelime listesi (text, bbox, confidence, matched_field ...)
-        field_results        : Ground truth alan eslesmesi (cer, wer, found ...)
-        common_field_results : Ortak alan kontrolu
-        execution_time_seconds, fields_found, fields_total ...
-        metrics              : generate_report formatındaki metrikler
+    Resmi ve ciktilari web_outputs klasorune kaydeder.
     """
     # Desteklenen uzanti kontrolu
     suffix = Path(file.filename).suffix.lower()
@@ -173,20 +217,29 @@ async def process_image(
             detail=f"Desteklenmeyen dosya tipi: {suffix}. PNG veya JPG gonderin.",
         )
 
-    # Gecici dosyaya kaydet (islem bittikten sonra otomatik silinir)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
+    import time
+    timestamp = int(time.time())
+    safe_filename = Path(file.filename).name.replace(" ", "_")
+    
+    # Resmi web_outputs/<engine>/<model_name>/ altina kaydet
+    saved_dir = WEB_OUTPUTS_DIR / engine / model_name
+    saved_dir.mkdir(parents=True, exist_ok=True)
+    
+    saved_img_name = f"uploaded_{timestamp}_{safe_filename}"
+    saved_img_path = saved_dir / saved_img_name
+
+    with open(saved_img_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
 
     try:
         result = process_single_image(
-            img_path=tmp_path,
+            img_path=str(saved_img_path),
             engine=engine,
             model_name=model_name,
+            original_name=file.filename,
         )
-    finally:
-        # Gecici dosyayi temizle
-        Path(tmp_path).unlink(missing_ok=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OCR islemi sirasinda hata: {e}")
 
     # process_single_image hata dondurmuse HTTP hataya cevir
     if "error" in result:
@@ -198,7 +251,57 @@ async def process_image(
     except Exception as e:
         print(f"Error computing single file metrics: {e}")
 
+    # Sonucu JSON olarak web_outputs/<engine>/<model_name>/ klasorune kaydet
+    saved_json_name = f"{Path(safe_filename).stem}.json"
+    saved_json_path = saved_dir / saved_json_name
+    with open(saved_json_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=4)
+
     return JSONResponse(content=result)
+
+
+# =============================================================================
+# Endpoint: /run-pipeline — Toplu analiz pipeline'ini tetikle
+# =============================================================================
+
+@app.post("/run-pipeline")
+def run_pipeline(background_tasks: BackgroundTasks):
+    global pipeline_status
+    if pipeline_status["status"] == "running":
+        raise HTTPException(status_code=400, detail="Toplu analiz zaten çalışıyor.")
+    background_tasks.add_task(run_full_pipeline_task)
+    return {"status": "started", "message": "Toplu analiz arka planda başlatıldı."}
+
+
+# =============================================================================
+# Endpoint: /pipeline-status — Toplu analiz durumunu sorgula
+# =============================================================================
+
+@app.get("/pipeline-status")
+def get_pipeline_status():
+    global pipeline_status
+    return pipeline_status
+
+
+# =============================================================================
+# Endpoint: /clear-web-outputs — web_outputs klasorunu temizle
+# =============================================================================
+
+@app.post("/clear-web-outputs")
+def clear_web_outputs():
+    """
+    web_outputs klasoru altindaki tum yuklemeleri ve sonuclari siler.
+    """
+    try:
+        if WEB_OUTPUTS_DIR.exists():
+            shutil.rmtree(WEB_OUTPUTS_DIR)
+        WEB_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+        return {"status": "success", "message": "web_outputs klasoru temizlendi."}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"web_outputs klasoru temizlenirken hata olustu: {e}",
+        )
 
 
 # =============================================================================

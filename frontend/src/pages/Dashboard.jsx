@@ -7,8 +7,10 @@
  * - Radar grafik: çok boyutlu skor görünümü
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
+import ImageViewer, { ConfidenceLegend } from '../components/ImageViewer'
+import ResultsPanel from '../components/ResultsPanel'
 import {
   BarChart, Bar,
   RadarChart, Radar, PolarGrid, PolarAngleAxis,
@@ -136,53 +138,112 @@ function CustomTooltip({ active, payload, label }) {
 }
 
 // ── Ana bileşen ───────────────────────────────────────────────────────────
+// ── Ana bileşen ───────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [report,  setReport]  = useState(null)
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState(null)
   const [selected, setSelected] = useState(null) // secili model indexi
+  const [docType, setDocType] = useState('surucubelgesi') // surucubelgesi veya dekont
 
-  useEffect(() => {
+  // Pipeline durumları
+  const [pipelineRunning, setPipelineRunning] = useState(false)
+  const [pipelineProgress, setPipelineProgress] = useState('')
+  const [pipelineError, setPipelineError] = useState(null)
+
+  const pollIntervalRef = useRef(null)
+
+  const loadReport = useCallback(() => {
+    setLoading(true)
     axios.get(`${API}/report`)
       .then(r => {
         setReport(r.data)
+        setError(null)
         setLoading(false)
       })
       .catch(err => {
         setError(
           err.response?.status === 404
-            ? 'Rapor henüz oluşturulmamış. Önce main.py\'i çalıştırın.'
+            ? 'Rapor henüz oluşturulmamış. Önce "Tüm Modelleri Çalıştır ve Yeniden Raporla" butonuna basın.'
             : 'API\'ye ulaşılamadı. Uvicorn sunucusunun çalıştığını kontrol edin.'
         )
         setLoading(false)
       })
   }, [])
 
-  if (loading) return (
-    <div className="spinner-wrap"><div className="spinner" /><span>Rapor yükleniyor...</span></div>
-  )
+  const startPolling = useCallback(() => {
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current)
+    pollIntervalRef.current = setInterval(async () => {
+      try {
+        const { data } = await axios.get(`${API}/pipeline-status`)
+        if (data.status === 'running') {
+          setPipelineRunning(true)
+          setPipelineProgress(data.progress)
+          setPipelineError(null)
+        } else if (data.status === 'success') {
+          setPipelineRunning(false)
+          setPipelineProgress('')
+          setPipelineError(null)
+          clearInterval(pollIntervalRef.current)
+          loadReport()
+        } else if (data.status === 'error') {
+          setPipelineRunning(false)
+          setPipelineProgress('')
+          setPipelineError(data.error)
+          clearInterval(pollIntervalRef.current)
+        } else {
+          // idle
+          setPipelineRunning(false)
+          clearInterval(pollIntervalRef.current)
+        }
+      } catch (err) {
+        console.error("Pipeline status fetch failed:", err)
+      }
+    }, 1500)
+  }, [loadReport])
 
-  if (error) return (
-    <div className="empty-state">
-      <h3>⚠ Rapor Bulunamadı</h3>
-      <p style={{ marginTop: '0.5rem' }}>{error}</p>
-    </div>
-  )
+  useEffect(() => {
+    // İlk olarak arka plandaki pipeline durumunu kontrol et
+    axios.get(`${API}/pipeline-status`)
+      .then(r => {
+        if (r.data.status === 'running') {
+          setPipelineRunning(true)
+          setPipelineProgress(r.data.progress)
+          startPolling()
+        } else {
+          loadReport()
+        }
+      })
+      .catch(() => {
+        loadReport()
+      })
 
-  const rows = extractMetrics(report)
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current)
+    }
+  }, [startPolling, loadReport])
 
-  if (rows.length === 0) return (
-    <div className="empty-state">
-      <h3>Raporda veri yok</h3>
-      <p>comparison_report.json boş veya beklenen formatta değil.</p>
-    </div>
-  )
+  const handleRunPipeline = async () => {
+    setPipelineRunning(true)
+    setPipelineProgress('Başlatılıyor...')
+    setPipelineError(null)
+    try {
+      await axios.post(`${API}/run-pipeline`)
+      startPolling()
+    } catch (err) {
+      setPipelineError(err.response?.data?.detail ?? 'Pipeline başlatılırken hata oluştu.')
+      setPipelineRunning(false)
+    }
+  }
 
-  const sel = selected != null ? rows[selected] : null
+  const rows = report ? extractMetrics(report) : []
+  const filteredRows = rows.filter(r => r.docType === docType)
+  const sel = selected != null ? filteredRows[selected] : null
+
 
   // Grafik verisi
-  const barData = rows.map((r, i) => ({
-    name:    `${r.docType}·${r.model}`,
+  const barData = filteredRows.map((r, i) => ({
+    name:    r.model === 'model_v1' ? r.engine : `${r.engine}/${r.model}`,
     engine:  r.engine,
     'CER %': r.cer,
     'WER %': r.wer,
@@ -191,152 +252,209 @@ export default function Dashboard() {
   }))
 
   const radarData = [
-    { metric: 'CER (düşük=iyi)', ...Object.fromEntries(rows.map(r => [r.label, r.cer])) },
-    { metric: 'WER (düşük=iyi)', ...Object.fromEntries(rows.map(r => [r.label, r.wer])) },
-    { metric: 'Güven %',         ...Object.fromEntries(rows.map(r => [r.label, r.conf])) },
-    { metric: 'Hit Rate %',      ...Object.fromEntries(rows.map(r => [r.label, r.hitRate])) },
-    { metric: 'Hız (s, düşük=iyi)', ...Object.fromEntries(rows.map(r => [r.label, r.speed])) },
+    { metric: 'CER (düşük=iyi)', ...Object.fromEntries(filteredRows.map(r => [`${r.engine}/${r.model}`, r.cer])) },
+    { metric: 'WER (düşük=iyi)', ...Object.fromEntries(filteredRows.map(r => [`${r.engine}/${r.model}`, r.wer])) },
+    { metric: 'Güven %',         ...Object.fromEntries(filteredRows.map(r => [`${r.engine}/${r.model}`, r.conf])) },
+    { metric: 'Hit Rate %',      ...Object.fromEntries(filteredRows.map(r => [`${r.engine}/${r.model}`, r.hitRate])) },
+    { metric: 'Hız (s, düşük=iyi)', ...Object.fromEntries(filteredRows.map(r => [`${r.engine}/${r.model}`, r.speed])) },
   ].filter(d => Object.values(d).some(v => v != null && typeof v === 'number'))
 
   return (
     <div>
-      <h2 className="section-heading">📊 Model Karşılaştırma Raporu</h2>
-
-      {/* ── Model chip seçici ── */}
-      <div className="model-select-bar">
-        {rows.map((r, i) => (
-          <button
-            key={i}
-            className={`model-chip ${selected === i ? 'active' : ''}`}
-            onClick={() => setSelected(selected === i ? null : i)}
-          >
-            <span style={{
-              display: 'inline-block',
-              width: 8, height: 8,
-              borderRadius: '50%',
-              background: PALETTE[i % PALETTE.length],
-              marginRight: 6,
-            }} />
-            {r.docType} · {r.engine}/{r.model}
-          </button>
-        ))}
+      {/* Header controls with title and Run Pipeline button */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <h2 className="section-heading" style={{ margin: 0 }}>📊 Karşılaştırma & Performans Analizi</h2>
+        <button
+          className="btn btn-primary"
+          onClick={handleRunPipeline}
+          disabled={pipelineRunning}
+          style={{ fontSize: '0.85rem', padding: '0.5rem 1rem' }}
+        >
+          {pipelineRunning ? '⏳ Toplu Rapor Üretiliyor...' : '⚡ Tüm Modelleri Çalıştır ve Yeniden Raporla'}
+        </button>
       </div>
 
-      {/* ── Seçili modelin KPI kartları ── */}
-      {sel ? (
-        <div className="kpi-grid" style={{ marginBottom: '1.5rem' }}>
-          <KpiCard label="CER" value={sel.cer} unit="%"
-            color={sel.cer == null ? undefined : sel.cer < 10 ? 'var(--green)' : sel.cer < 30 ? 'var(--yellow)' : 'var(--red)'} />
-          <KpiCard label="WER" value={sel.wer} unit="%"
-            color={sel.wer == null ? undefined : sel.wer < 15 ? 'var(--green)' : sel.wer < 40 ? 'var(--yellow)' : 'var(--red)'} />
-          <KpiCard label="Ortalama Güven" value={sel.conf} unit="%"
-            color={sel.conf == null ? undefined : sel.conf >= 80 ? 'var(--green)' : sel.conf >= 50 ? 'var(--yellow)' : 'var(--red)'} />
-          <KpiCard label="Hit Rate" value={sel.hitRate} unit="%" />
-          <KpiCard label="Alan Eşleşme" value={sel.fieldMatch} unit="%" color="var(--accent-light)" />
-          <KpiCard label="Ort. Hız" value={sel.speed} unit="s" />
+      {pipelineError && (
+        <div className="error-box" style={{ marginBottom: '1.5rem' }}>
+          ⚠ {pipelineError}
         </div>
-      ) : (
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '1.5rem' }}>
-          Detaylı metrikleri görmek için yukarıdan bir model seçin.
-        </p>
       )}
 
-      {/* ── Grafikler ── */}
-      <div className="dashboard-grid">
-
-        {/* Çubuk Grafik */}
-        <div className="card">
-          <div className="card-title">CER / WER / Güven Karşılaştırması</div>
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={barData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(99,172,255,0.08)" />
-              <XAxis dataKey="name" tick={{ fill: '#8fafd4', fontSize: 11 }} />
-              <YAxis tick={{ fill: '#8fafd4', fontSize: 11 }} unit="%" />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ fontSize: '0.78rem', color: '#8fafd4' }} />
-              <Bar dataKey="CER %" fill="#ef4444" radius={[4,4,0,0]} />
-              <Bar dataKey="WER %" fill="#f59e0b" radius={[4,4,0,0]} />
-              <Bar dataKey="Güven" fill="#3b82f6" radius={[4,4,0,0]} />
-            </BarChart>
-          </ResponsiveContainer>
+      {/* ── SEKMELER / DURUMLAR ── */}
+      {pipelineRunning ? (
+        <div className="spinner-wrap" style={{ margin: '4rem 0' }}>
+          <div className="spinner" />
+          <span style={{ fontWeight: 500 }}>{pipelineProgress}</span>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+            Bu işlem tüm OCR modellerini veri tabanındaki tüm dosyalarla çalıştırdığı için 1-3 dakika sürebilir.
+          </span>
         </div>
-
-        {/* Radar Grafik */}
-        <div className="card">
-          <div className="card-title">Çok Boyutlu Model Karşılaştırması</div>
-          {radarData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={260}>
-              <RadarChart data={radarData}>
-                <PolarGrid stroke="rgba(99,172,255,0.15)" />
-                <PolarAngleAxis dataKey="metric" tick={{ fill: '#8fafd4', fontSize: 10 }} />
-                {rows.map((r, i) => (
-                  <Radar
-                    key={r.label}
-                    name={`${r.engine}/${r.model}`}
-                    dataKey={r.label}
-                    stroke={PALETTE[i % PALETTE.length]}
-                    fill={PALETTE[i % PALETTE.length]}
-                    fillOpacity={0.12}
-                  />
-                ))}
-                <Legend wrapperStyle={{ fontSize: '0.78rem', color: '#8fafd4' }} />
-                <Tooltip content={<CustomTooltip />} />
-              </RadarChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="empty-state" style={{ padding: '2rem' }}>
-              <p>Radar için yeterli metrik verisi yok.</p>
-            </div>
-          )}
+      ) : loading ? (
+        <div className="spinner-wrap"><div className="spinner" /><span>Rapor yükleniyor...</span></div>
+      ) : error ? (
+        <div className="empty-state">
+          <h3>⚠ Rapor Bulunamadı</h3>
+          <p style={{ marginTop: '0.5rem' }}>{error}</p>
         </div>
-      </div>
+      ) : rows.length === 0 ? (
+        <div className="empty-state">
+          <h3>Raporda veri yok</h3>
+          <p>comparison_report.json boş veya beklenen formatta değil.</p>
+        </div>
+      ) : (
+        <div>
+          {/* ── Alt Sekme Seçici ── */}
+          <div className="sub-tabs" style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem' }}>
+            <button
+              className={`nav-btn ${docType === 'surucubelgesi' ? 'active' : ''}`}
+              onClick={() => { setDocType('surucubelgesi'); setSelected(null); }}
+              style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}
+            >
+              🪪 Sürücü Belgesi Karşılaştırması
+            </button>
+            <button
+              className={`nav-btn ${docType === 'dekont' ? 'active' : ''}`}
+              onClick={() => { setDocType('dekont'); setSelected(null); }}
+              style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}
+            >
+              🧾 Dekont Karşılaştırması
+            </button>
+          </div>
 
-      {/* ── Tam tablo ── */}
-      <div className="card" style={{ marginTop: '1.5rem' }}>
-        <div className="card-title">Tüm Model Metrikleri</div>
-        <table className="field-table">
-          <thead>
-            <tr>
-              <th>Belge Tipi</th>
-              <th>Engine / Model</th>
-              <th>CER %</th>
-              <th>WER %</th>
-              <th>Güven %</th>
-              <th>Hit Rate %</th>
-              <th>Alan Eşl. %</th>
-              <th>Hız (s)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} style={selected === i ? { background: 'var(--bg-card-hover)' } : {}}>
-                <td>
-                  <span style={{
-                    display: 'inline-block', width: 8, height: 8,
-                    borderRadius: '50%',
-                    background: PALETTE[i % PALETTE.length],
-                    marginRight: 6,
-                  }} />
-                  {r.docType}
-                </td>
-                <td style={{ color: 'var(--text-secondary)' }}>{r.engine} / {r.model}</td>
-                <td style={{ color: r.cer == null ? 'var(--text-muted)' : r.cer < 10 ? 'var(--green)' : r.cer < 30 ? 'var(--yellow)' : 'var(--red)' }}>
-                  {r.cer ?? '—'}
-                </td>
-                <td style={{ color: r.wer == null ? 'var(--text-muted)' : r.wer < 15 ? 'var(--green)' : r.wer < 40 ? 'var(--yellow)' : 'var(--red)' }}>
-                  {r.wer ?? '—'}
-                </td>
-                <td style={{ color: r.conf == null ? 'var(--text-muted)' : r.conf >= 80 ? 'var(--green)' : r.conf >= 50 ? 'var(--yellow)' : 'var(--red)' }}>
-                  {r.conf ?? '—'}
-                </td>
-                <td>{r.hitRate != null ? `${r.hitRate}%` : '—'}</td>
-                <td>{r.fieldMatch != null ? `${r.fieldMatch}%` : '—'}</td>
-                <td>{r.speed ?? '—'}</td>
-              </tr>
+          {/* Model chip seçici */}
+          <div className="model-select-bar">
+            {filteredRows.map((r, i) => (
+              <button
+                key={i}
+                className={`model-chip ${selected === i ? 'active' : ''}`}
+                onClick={() => setSelected(selected === i ? null : i)}
+              >
+                <span style={{
+                  display: 'inline-block',
+                  width: 8, height: 8,
+                  borderRadius: '50%',
+                  background: PALETTE[i % PALETTE.length],
+                  marginRight: 6,
+                }} />
+                {r.engine}/{r.model}
+              </button>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </div>
+
+          {/* Seçili modelin KPI kartları */}
+          {sel ? (
+            <div className="kpi-grid" style={{ marginBottom: '1.5rem' }}>
+              <KpiCard label="CER" value={sel.cer} unit="%"
+                color={sel.cer == null ? undefined : sel.cer < 10 ? 'var(--green)' : sel.cer < 30 ? 'var(--yellow)' : 'var(--red)'} />
+              <KpiCard label="WER" value={sel.wer} unit="%"
+                color={sel.wer == null ? undefined : sel.wer < 15 ? 'var(--green)' : sel.wer < 40 ? 'var(--yellow)' : 'var(--red)'} />
+              <KpiCard label="Ortalama Güven" value={sel.conf} unit="%"
+                color={sel.conf == null ? undefined : sel.conf >= 80 ? 'var(--green)' : sel.conf >= 50 ? 'var(--yellow)' : 'var(--red)'} />
+              <KpiCard label="Hit Rate" value={sel.hitRate} unit="%" />
+              <KpiCard label="Alan Eşleşme" value={sel.fieldMatch} unit="%" color="var(--accent-light)" />
+              <KpiCard label="Ort. Hız" value={sel.speed} unit="s" />
+            </div>
+          ) : (
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '1.5rem' }}>
+              Detaylı metrikleri görmek için yukarıdan bir model seçin.
+            </p>
+          )}
+
+          {/* Grafikler */}
+          <div className="dashboard-grid">
+            {/* Çubuk Grafik */}
+            <div className="card">
+              <div className="card-title">CER / WER / Güven Karşılaştırması</div>
+              <ResponsiveContainer width="100%" height={260}>
+                <BarChart data={barData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(99,172,255,0.08)" />
+                  <XAxis dataKey="name" tick={{ fill: '#8fafd4', fontSize: 11 }} />
+                  <YAxis tick={{ fill: '#8fafd4', fontSize: 11 }} unit="%" />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Legend wrapperStyle={{ fontSize: '0.78rem', color: '#8fafd4' }} />
+                  <Bar dataKey="CER %" fill="#ef4444" radius={[4,4,0,0]} />
+                  <Bar dataKey="WER %" fill="#f59e0b" radius={[4,4,0,0]} />
+                  <Bar dataKey="Güven" fill="#3b82f6" radius={[4,4,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Radar Grafik */}
+            <div className="card">
+              <div className="card-title">Çok Boyutlu Model Karşılaştırması</div>
+              {radarData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={260}>
+                  <RadarChart data={radarData}>
+                    <PolarGrid stroke="rgba(99,172,255,0.15)" />
+                    <PolarAngleAxis dataKey="metric" tick={{ fill: '#8fafd4', fontSize: 10 }} />
+                    {filteredRows.map((r, i) => (
+                      <Radar
+                        key={r.label}
+                        name={`${r.engine}/${r.model}`}
+                        dataKey={`${r.engine}/${r.model}`}
+                        stroke={PALETTE[i % PALETTE.length]}
+                        fill={PALETTE[i % PALETTE.length]}
+                        fillOpacity={0.12}
+                      />
+                    ))}
+                    <Legend wrapperStyle={{ fontSize: '0.78rem', color: '#8fafd4' }} />
+                    <Tooltip content={<CustomTooltip />} />
+                  </RadarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="empty-state" style={{ padding: '2rem' }}>
+                  <p>Radar için yeterli metrik verisi yok.</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Tam tablo */}
+          <div className="card" style={{ marginTop: '1.5rem' }}>
+            <div className="card-title">{docType === 'surucubelgesi' ? '🪪 Sürücü Belgesi Model Metrikleri' : '🧾 Dekont Model Metrikleri'}</div>
+            <table className="field-table">
+              <thead>
+                <tr>
+                  <th>Engine / Model</th>
+                  <th>CER %</th>
+                  <th>WER %</th>
+                  <th>Güven %</th>
+                  <th>Hit Rate %</th>
+                  <th>Alan Eşl. %</th>
+                  <th>Hız (s)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRows.map((r, i) => (
+                  <tr key={i} style={selected === i ? { background: 'var(--bg-card-hover)' } : {}}>
+                    <td>
+                      <span style={{
+                        display: 'inline-block', width: 8, height: 8,
+                        borderRadius: '50%',
+                        background: PALETTE[i % PALETTE.length],
+                        marginRight: 6,
+                      }} />
+                      {r.engine} / {r.model}
+                    </td>
+                    <td style={{ color: r.cer == null ? 'var(--text-muted)' : r.cer < 10 ? 'var(--green)' : r.cer < 30 ? 'var(--yellow)' : 'var(--red)' }}>
+                      {r.cer ?? '—'}
+                    </td>
+                    <td style={{ color: r.wer == null ? 'var(--text-muted)' : r.wer < 15 ? 'var(--green)' : r.wer < 40 ? 'var(--yellow)' : 'var(--red)' }}>
+                      {r.wer ?? '—'}
+                    </td>
+                    <td style={{ color: r.conf == null ? 'var(--text-muted)' : r.conf >= 80 ? 'var(--green)' : r.conf >= 50 ? 'var(--yellow)' : 'var(--red)' }}>
+                      {r.conf ?? '—'}
+                    </td>
+                    <td>{r.hitRate != null ? `${r.hitRate}%` : '—'}</td>
+                    <td>{r.fieldMatch != null ? `${r.fieldMatch}%` : '—'}</td>
+                    <td>{r.speed ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

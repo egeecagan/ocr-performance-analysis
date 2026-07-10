@@ -45,6 +45,13 @@ from runners.run_easyocr import run_easyocr
 from runners.run_doctr import run_doctr
 from runners.run_rapidocr import run_rapidocr
 
+try:
+    from runners.run_paddleocr import run_paddleocr
+    HAS_PADDLEOCR = True
+except (ImportError, ModuleNotFoundError):
+    run_paddleocr = None
+    HAS_PADDLEOCR = False
+
 from runners._common import load_config
 
 
@@ -127,6 +134,35 @@ def _load_rapidocr_engine(config_path):
     return {"engine": engine}
 
 
+def _load_paddleocr_engine(config_path):
+    """Sets up the PaddleOCR engine ONCE, based on the language/architecture settings in the config."""
+    from paddleocr import PaddleOCR
+    from runners._common import filter_valid_kwargs
+    
+    config = load_config(config_path)
+    settings = config.get("ocr_settings", {})
+    lang = settings.get("lang", "tr")
+    use_doc_orientation_classify = settings.get("use_doc_orientation_classify", False)
+    use_doc_unwarping = settings.get("use_doc_unwarping", False)
+    use_textline_orientation = settings.get("use_textline_orientation", False)
+    
+    extra_init_kwargs = filter_valid_kwargs(PaddleOCR.__init__, settings)
+    extra_init_kwargs.pop("lang", None)
+    extra_init_kwargs.pop("use_doc_orientation_classify", None)
+    extra_init_kwargs.pop("use_doc_unwarping", None)
+    extra_init_kwargs.pop("use_textline_orientation", None)
+    extra_init_kwargs.pop("font_path", None)
+    
+    engine = PaddleOCR(
+        lang=lang,
+        use_doc_orientation_classify=use_doc_orientation_classify,
+        use_doc_unwarping=use_doc_unwarping,
+        use_textline_orientation=use_textline_orientation,
+        **extra_init_kwargs
+    )
+    return {"engine": engine}
+
+
 # =============================================================================
 # THE SINGLE REGISTRATION POINT — just add one entry here when adding a new engine
 # =============================================================================
@@ -151,6 +187,14 @@ ENGINES = {
         "loader": _load_rapidocr_engine,
         "shared_kwargs": {"engine": "engine"},
     },
+}
+
+if HAS_PADDLEOCR:
+    ENGINES["paddleocr"] = {
+        "run_function": run_paddleocr,
+        "loader": _load_paddleocr_engine,
+        "shared_kwargs": {"engine": "engine"},
+    }
 
     # --- Example entry for adding a new engine (copy and edit) ---
     # "new_engine": {
@@ -158,4 +202,3 @@ ENGINES = {
     #     "loader": _load_new_engine_model,  # or None if there's no real loading cost
     #     "shared_kwargs": {"model": "model"},
     # },
-}

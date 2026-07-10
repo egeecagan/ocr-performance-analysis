@@ -204,7 +204,8 @@ def detect_common_fields_file(img_name, common_fields_dir):
     if not common_fields_dir.exists():
         return None
 
-    doc_type = Path(img_name).stem.split("_", 1)[0].lower()
+    import re
+    doc_type = re.sub(r'[_0-9]+$', '', Path(img_name).stem).lower()
 
     txt_file = common_fields_dir / f"{doc_type}_c.txt"
     return txt_file if txt_file.exists() else None

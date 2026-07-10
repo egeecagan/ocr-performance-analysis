@@ -10,6 +10,7 @@ file_fields/
 
 # Tüm OCR çıktıları (JSON sonuçları + highlighted/masked viz görselleri)
 outputs/
+web_outputs/
 
 # doctr preprocessing için kullanılan geçici dosyalar (run_doctr.py içinde
 # outputs/_tmp_preprocessed/ altına yazılıp siliniyor, yine de garantiye alalım)
