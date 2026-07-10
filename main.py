@@ -57,6 +57,98 @@ def load_ground_truth(img_name, truths_dir=TRUTHS_DIR):
     return None, False
 
 
+def process_single_image(img_path: str, engine: str, model_name: str) -> dict:
+    """
+    API tarafindan cagrilir. Tek bir gorsel dosyasini isler ve
+    OCR cikti sozlugunu (words, bbox, metrikler vb.) geri dondurur.
+
+    Parametreler:
+        img_path   : Gorselin tam dosya yolu (str)
+        engine     : Kullanilacak OCR motoru (ornek: 'tesseract')
+        model_name : Model versiyonu (ornek: 'model_v1')
+
+    Doner:
+        OCR sonuc sozlugu (words, confidence, field_results ...)
+        veya hata durumunda {"error": "aciklama"} sozlugu.
+    """
+    if engine not in ENGINES:
+        return {"error": f"Engine '{engine}' kayitli degil. Gecerli motorlar: {list(ENGINES.keys())}"}
+
+    engine_spec = ENGINES[engine]
+    run_function = engine_spec["run_function"]
+    loader       = engine_spec["loader"]
+    shared_kwargs_map = engine_spec["shared_kwargs"]
+
+    config_path = CONFIGS_DIR / engine / f"{model_name}.yaml"
+    if not config_path.exists():
+        return {"error": f"Konfigurasyon dosyasi bulunamadi: {config_path}"}
+
+    # Modeli yukle (once)
+    shared_objects = {}
+    shared_load_time = 0.0
+    if loader is not None:
+        load_start = time.time()
+        try:
+            loaded = loader(str(config_path))
+        except Exception as e:
+            return {"error": f"Model yuklenemedi: {e}"}
+        shared_load_time = round(time.time() - load_start, 4)
+        for loaded_key, kwarg_name in shared_kwargs_map.items():
+            shared_objects[kwarg_name] = loaded[loaded_key]
+
+    # OCR calistir
+    try:
+        output_data = run_function(str(img_path), str(config_path), **shared_objects)
+    except Exception as e:
+        return {"error": f"OCR islemi basarisiz: {e}"}
+
+    img_name = Path(img_path).name
+
+    # Ground truth (varsa)
+    ground_truth_data, has_ground_truth = load_ground_truth(img_name)
+    output_data["ground_truth"]     = ground_truth_data
+    output_data["has_ground_truth"] = has_ground_truth
+
+    fields = (ground_truth_data or {}).get("fields", {})
+
+    # Kelimeleri field eslesmesiyle zenginlestir
+    if "words" in output_data:
+        output_data["words"] = enrich_words_with_field_matches_lcs(
+            output_data["words"], fields
+        )
+
+    # Alan bazli dogruluk
+    field_check = check_all_fields_lcs_cer_with_bbox(fields, output_data.get("words", []))
+    output_data["fields_found"]       = field_check["fields_found"]
+    output_data["fields_total"]       = field_check["fields_total"]
+    output_data["field_match_ratio"]  = (
+        round(field_check["fields_found"] / field_check["fields_total"], 4)
+        if field_check["fields_total"] else None
+    )
+    output_data["field_results"]      = field_check["field_results"]
+
+    # Ortak alan kontrolu
+    common_fields_file = detect_common_fields_file(img_name, COMMON_FIELDS_DIR)
+    common_fields      = load_common_fields(common_fields_file) if common_fields_file else {}
+    common_field_check = check_all_fields_lcs_cer_with_bbox(
+        common_fields, output_data.get("words", [])
+    )
+    output_data["common_fields_found"]       = common_field_check["fields_found"]
+    output_data["common_fields_total"]       = common_field_check["fields_total"]
+    output_data["common_field_match_ratio"]  = (
+        round(common_field_check["fields_found"] / common_field_check["fields_total"], 4)
+        if common_field_check["fields_total"] else None
+    )
+    output_data["common_field_results"]  = common_field_check["field_results"]
+    output_data["common_fields_source"]  = (
+        str(common_fields_file) if common_fields_file else None
+    )
+    output_data["load_time_seconds"]     = shared_load_time
+    output_data["load_time_is_shared"]   = loader is not None
+
+    return output_data
+
+
 def process_pipeline(engine, model_name):
     if engine not in ENGINES:
         print(f"Error: '{engine}' is not registered in registry.py.")
