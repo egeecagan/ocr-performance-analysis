@@ -48,35 +48,27 @@ from collections import defaultdict
 
 
 # ---------------------------------------------------------------------------
-# Sabitler
-# ---------------------------------------------------------------------------
-
-# Bir JSON dosyasının hangi belge türüne ait olduğu, dosya adında geçen
-# bu anahtar kelimelerden anlaşılır (bkz. determine_doc_type).
-# Örn: "surucubelgesi_012.json" -> "surucubelgesi"
-DOC_TYPE_KEYWORDS = {
-    "surucubelgesi": "surucubelgesi",
-    "dekont": "dekont",
-}
-
-
-# ---------------------------------------------------------------------------
 # Genel yardımcı fonksiyonlar
 # ---------------------------------------------------------------------------
 
 def determine_doc_type(stem: str):
     """
     Dosya adından (uzantısız, örn. "dekont_003") belge türünü saptar.
-    stem dediğimiz şey direkt olarak dosyanın uzantısız isminin tamamı bu arada
-    DOC_TYPE_KEYWORDS içindeki anahtar kelimelerden biri dosya adında
-    geçiyorsa o belge türü döner. Hiçbiri eşleşmezse None döner ve bu
-    dosya rapora hiç dahil edilmez (bkz. generate_report içindeki döngü).
+
+    İsimlendirme kuralı: belge türü isminin kendisinde alt tire (_)
+    BULUNMAZ; belge türü ismi ile dosya numarası arasına tek bir alt
+    tire konur (örn. "dekont_003" -> "dekont", "surucubelgesi_012" ->
+    "surucubelgesi", "fatura_7" -> "fatura"). Belge türü, dolayısıyla
+    dosya adının ilk alt tireden ÖNCEKİ kısmıdır.
+
+    Bu yapı tamamen geneldir: sabit bir anahtar kelime listesine
+    (DOC_TYPE_KEYWORDS vb.) ihtiyaç yoktur — fatura, banka, dekont,
+    surucubelgesi ya da yeni eklenecek herhangi bir belge türü otomatik
+    olarak tanınır. Aynı isimlendirme, common_fields klasöründeki
+    "<belge_turu>_c.txt" dosyalarıyla eşleştirme için de kullanılır
+    (bkz. load_specific_keywords).
     """
-    lower = stem.lower()
-    for keyword, doc_type in DOC_TYPE_KEYWORDS.items():
-        if keyword in lower:
-            return doc_type
-    return None
+    return stem.split("_", 1)[0].lower()
 
 
 def safe_float(value):
@@ -125,8 +117,11 @@ def true_ratio(booleans: list):
 def load_specific_keywords(common_fields_dir, doc_type: str) -> list:
     """
     Belge türüne özel aranacak anahtar kelimeleri, common_fields_dir
-    klasöründeki "<doc_type>.txt" dosyasından okur (örn. doc_type=
-    'dekont' için common_fields_dir/dekont.txt).
+    klasöründeki "<doc_type>_c.txt" dosyasından okur (örn. doc_type=
+    'dekont' için common_fields_dir/dekont_c.txt). Bu isimlendirme,
+    determine_doc_type'ın dosya adından çıkardığı belge türü ile
+    birebir eşleşir, böylece herhangi bir belge türü için ek kod
+    yazmadan sadece doğru adla bir .txt dosyası eklemek yeterlidir.
 
     Dosya formatı:
         - Her satır bir anahtar kelime olarak kabul edilir.
@@ -137,7 +132,7 @@ def load_specific_keywords(common_fields_dir, doc_type: str) -> list:
     yoksa hata/uyarı vermeden sessizce boş liste döner, yani bu belge
     türü için özel kelime arama (hit-rate) hesabı yapılmaz.
     """
-    txt_path = Path(common_fields_dir) / f"{doc_type}.txt"
+    txt_path = Path(common_fields_dir) / f"{doc_type}_c.txt"
     if not txt_path.exists():
         return []  # txt yoksa bu tür için keyword arama yapılmaz
 
