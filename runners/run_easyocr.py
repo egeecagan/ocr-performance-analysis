@@ -16,7 +16,7 @@ from runners._common import (
 )
 
 
-def run_easyocr(image_path, config_path, reader=None):
+def run_easyocr(image_path, config_path, model=None):
     config = load_config(config_path)
     reader_settings = config.get("reader_settings", {})
     readtext_settings = config.get("readtext_settings", {}) or {}
@@ -39,11 +39,11 @@ def run_easyocr(image_path, config_path, reader=None):
     # --- load_time_seconds ---
     # Tesseract'ın aksine burada GERÇEK bir maliyet var: easyocr.Reader(...)
     # modelleri diskten/internetten yükler, bu saniyeler sürebilir. Eğer
-    # reader dışarıdan enjekte edilmemişse (main.py her görsel için Reader'ı
+    # model dışarıdan enjekte edilmemişse (main.py her görsel için Reader'ı
     # YENİDEN oluşturuyorsa) bu maliyet her çağrıda tekrar tekrar ödenir —
     # tam da "eski donanımda ilk açılış" senaryonuzda önemli olan şey bu.
-    # reader=None ise burada GERÇEKTEN ölçüyoruz, sabit 0.0 yazmıyoruz.
-    if reader is None:
+    # model=None ise burada GERÇEKTEN ölçüyoruz, sabit 0.0 yazmıyoruz.
+    if model is None:
         load_start = time.time()
         try:
             # Config'teki TÜM reader_settings anahtarlarını, easyocr.Reader'ın
@@ -65,7 +65,7 @@ def run_easyocr(image_path, config_path, reader=None):
             extra_reader_kwargs.pop("lang_list", None)
             extra_reader_kwargs.pop("gpu", None)
 
-            reader = easyocr.Reader(languages, gpu=gpu, **extra_reader_kwargs)
+            model = easyocr.Reader(languages, gpu=gpu, **extra_reader_kwargs)
         except Exception as e:
             # EasyOCR bazı dil kombinasyonlarını desteklemez (örn. bazı
             # Latin-olmayan scriptler birlikte kullanılamaz). Kütüphanenin
@@ -79,7 +79,7 @@ def run_easyocr(image_path, config_path, reader=None):
             ) from e
         load_time = round(time.time() - load_start, 4)
     else:
-        # Reader dışarıdan (örn. main.py'de bir kez oluşturulup tüm
+        # Model dışarıdan (örn. main.py'de bir kez oluşturulup tüm
         # görseller için tekrar kullanılıyorsa) geldiyse, bu çağrıda
         # yükleme maliyeti yok.
         load_time = 0.0
@@ -119,14 +119,14 @@ def run_easyocr(image_path, config_path, reader=None):
 
     # Config'teki TÜM readtext_settings anahtarlarını, readtext'in kabul
     # ettiği gerçek parametrelerle filtreleyip otomatik geçiriyoruz.
-    valid_readtext_kwargs = filter_valid_kwargs(reader.readtext, readtext_settings)
+    valid_readtext_kwargs = filter_valid_kwargs(model.readtext, readtext_settings)
 
     start_time = time.time()  # Süre BURADA başlar — model yükleme VE
     # preprocessing süreye dahil değil, sadece "OCR motorunun kendisi ne
     # kadar sürdü" ölçülüyor (Tesseract'taki ile aynı prensip).
 
     # OCR işlemini yap — config'teki tüm ayarlarla
-    results = reader.readtext(ocr_input, **valid_readtext_kwargs)
+    results = model.readtext(ocr_input, **valid_readtext_kwargs)
 
     execution_time = round(time.time() - start_time, 4)  # Süre BURADA donar
 
@@ -281,23 +281,23 @@ if __name__ == "__main__":
 
     # --- ÖNEMLİ: main.py entegrasyonu için ---
     # Şu anki main.py, her görsel için run_easyocr(img, config) çağırırken
-    # `reader` parametresini HİÇ vermiyor. Bu durumda yukarıdaki örnekte
-    # olduğu gibi her çağrıda reader=None olur ve easyocr.Reader(...) HER
+    # `model` parametresini HİÇ vermiyor. Bu durumda yukarıdaki örnekte
+    # olduğu gibi her çağrıda model=None olur ve easyocr.Reader(...) HER
     # GÖRSEL İÇİN YENİDEN YÜKLENİR — 20 görsellik bir klasörde model 20 kez
     # diskten/internetten yüklenir. Bu hem gerçek dünyada anlamsız bir
     # yavaşlıktır hem de raporunuzdaki "EasyOCR süresi" rakamını yapay
     # olarak şişirir (asıl suçlu tekrar tekrar yükleme, OCR'ın kendisi
     # değil).
     #
-    # Doğru kullanım — reader'ı BİR KEZ oluşturup tüm görseller için
+    # Doğru kullanım — Reader'ı BİR KEZ oluşturup tüm görseller için
     # paylaşmak:
     #
     #   import easyocr
     #   shared_reader = easyocr.Reader(["tr", "en"], gpu=False)
     #   for img_path in tüm_görseller:
-    #       result = run_easyocr(img_path, config_path, reader=shared_reader)
+    #       result = run_easyocr(img_path, config_path, model=shared_reader)
     #
     # main.py'yi güncellediğimizde bu mantığı process_pipeline() içine
     # ekleyeceğiz — engine == 'easyocr' (ve aynı sorunu yaşayan 'trocr',
-    # 'doctr' için de) ilk görselden önce reader/model bir kez kurulup
+    # 'doctr' için de) ilk görselden önce model bir kez kurulup
     # döngü boyunca yeniden kullanılacak.

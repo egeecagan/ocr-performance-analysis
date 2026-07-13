@@ -13,31 +13,40 @@ You do NOT need to touch main.py. Just:
      **optional_model_kwargs) and return a dict containing
      {"text", "load_time_seconds", "execution_time_seconds", ...}.
 
-  2. Add a NEW ENTRY to the ENGINES dictionary below (example below).
+  2. If the engine has a real model/reader/processor to set up, write a
+     _load_<engine_name>(config_path) function in this file (see the
+     existing _load_* functions below for the pattern) that returns
+     {"model": <loaded object>}. Skip this step if there's nothing worth
+     loading once (e.g. Tesseract) — use loader: None instead.
+
+  3. Add a NEW ENTRY to the ENGINES dictionary below (example below).
 
 When process_pipeline() is called, main.py automatically:
   - finds the correct run_function from the registry
   - if present, calls loader() ONCE to set up the model/reader
-  - passes this loaded object into run_function for every image, using
-    the correct kwarg names (shared_kwargs)
+  - passes the loaded object into run_function for every image as the
+    `model` kwarg
 
 === WHAT EACH FIELD MEANS ===
 
 run_function:
-    The main function in the runner module (e.g. run_tesseract).
+    The main function in the runner module (e.g. run_tesseract). Not
+    implemented here — each engine defines its own in runners/run_<engine>.py.
+    It takes an image (plus config and, if any, the loaded model) and
+    returns the OCR result dict.
 
 loader:
-    A function that sets up the model/reader/processor ONCE. Takes
-    config_path, returns the loaded object(s) as a dict — the dict's keys
-    must match shared_kwargs. Left as None if there's no real
-    model-loading cost (e.g. Tesseract); in this case main.py loads
+    A function that sets up the model/reader/processor once. Takes
+    config_path, validates the config against what the engine actually
+    supports (all engines except Tesseract, which needs no such check),
+    and returns {"model": <loaded object>}. Left as None if there's no
+    real model-loading cost (e.g. Tesseract); in this case main.py loads
     nothing and calls run_function with just (image_path, config_path).
 
-shared_kwargs:
-    Maps the keys in the dict returned by loader() to the parameter names
-    run_function expects them under. E.g. for EasyOCR, {"reader": "reader"}
-    -> loader returns {"reader": <Reader object>}, and main.py calls this
-    as run_easyocr(img, config, reader=<Reader object>).
+    By convention every loader returns its object under the key "model",
+    and every run_<engine_name> accepts it as a `model` kwarg — this is
+    what lets main.py wire loader -> run_function without any per-engine
+    mapping.
 """
 
 from runners.run_tesseract import run_tesseract
@@ -56,7 +65,6 @@ from runners._common import load_config
 
 
 def _load_easyocr_reader(config_path):
-    """Sets up the EasyOCR Reader ONCE, based on the language/gpu settings in the config."""
     import easyocr
     import torch
     from runners._common import filter_valid_kwargs
@@ -67,19 +75,17 @@ def _load_easyocr_reader(config_path):
     gpu_setting = reader_settings.get("gpu", "auto")
     gpu = torch.cuda.is_available() if gpu_setting == "auto" else bool(gpu_setting)
 
-    # Same mechanism as run_easyocr.py: any extra key under reader_settings
-    # (e.g. recog_network, detector, recognizer, download_enabled) that
-    # easyocr.Reader actually accepts is passed through automatically — no
-    # code change needed when you add new settings to the config.
     extra_reader_kwargs = filter_valid_kwargs(easyocr.Reader.__init__, reader_settings)
+    # It checks the valid parameters for the constructor of the easyocr and if something
+    # does not make sense in the reader_settings object it wont take that
+
     extra_reader_kwargs.pop("lang_list", None)
     extra_reader_kwargs.pop("gpu", None)
 
-    return {"reader": easyocr.Reader(languages, gpu=gpu, **extra_reader_kwargs)}
+    return {"model": easyocr.Reader(languages, gpu=gpu, **extra_reader_kwargs)}
 
 
 def _load_doctr_model(config_path):
-    """Sets up the doctr model ONCE, based on the architecture settings in the config."""
     from doctr.models import ocr_predictor
     import torch
     from runners._common import filter_valid_kwargs
@@ -92,13 +98,6 @@ def _load_doctr_model(config_path):
     gpu_setting = model_settings.get("gpu", "auto")
     gpu = torch.cuda.is_available() if gpu_setting == "auto" else bool(gpu_setting)
 
-    # Same mechanism as run_doctr.py: any extra key under model_settings
-    # (e.g. assume_straight_pages, preserve_aspect_ratio, detect_orientation,
-    # detect_language) that ocr_predictor actually accepts is passed
-    # through automatically — no code change needed when you add new
-    # settings to the config. ocr_predictor accepts **kwargs, so we
-    # explicitly remove our own config-only field (gpu) which would
-    # otherwise be passed through unfiltered.
     extra_model_kwargs = filter_valid_kwargs(ocr_predictor, model_settings)
     extra_model_kwargs.pop("det_arch", None)
     extra_model_kwargs.pop("reco_arch", None)
@@ -114,7 +113,6 @@ def _load_doctr_model(config_path):
 
 
 def _load_rapidocr_engine(config_path):
-    """Sets up the RapidOCR engine ONCE, based on the language/model_selection settings in the config."""
     from rapidocr import RapidOCR
     from runners.run_rapidocr import build_rapidocr_params
 
@@ -122,17 +120,12 @@ def _load_rapidocr_engine(config_path):
     settings = config.get("ocr_settings", {})
     lang_type = settings.get("lang_type", "tr")
 
-    # build_rapidocr_params is the SAME function as in run_rapidocr.py — we
-    # import it here instead of redefining it, so that running via main.py
-    # (through the registry) applies the EXACT SAME model_type/model_path
-    # selection as when you call run_rapidocr.py DIRECTLY.
     rapidocr_params = {"Rec.lang_type": lang_type}
     rapidocr_params.update(build_rapidocr_params(settings))
 
     engine = RapidOCR(params=rapidocr_params)
 
-    return {"engine": engine}
-
+    return {"model": engine}
 
 def _load_paddleocr_engine(config_path):
     """Sets up the PaddleOCR engine ONCE, based on the language/architecture settings in the config."""
@@ -170,22 +163,18 @@ ENGINES = {
     "tesseract": {
         "run_function": run_tesseract,
         "loader": None,  # No real model-loading cost
-        "shared_kwargs": {},
     },
     "easyocr": {
         "run_function": run_easyocr,
         "loader": _load_easyocr_reader,
-        "shared_kwargs": {"reader": "reader"},
     },
     "doctr": {
         "run_function": run_doctr,
         "loader": _load_doctr_model,
-        "shared_kwargs": {"model": "model"},
     },
     "rapidocr": {
         "run_function": run_rapidocr,
         "loader": _load_rapidocr_engine,
-        "shared_kwargs": {"engine": "engine"},
     },
 }
 
