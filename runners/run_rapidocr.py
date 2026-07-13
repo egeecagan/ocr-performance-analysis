@@ -92,7 +92,7 @@ def build_rapidocr_params(settings):
     return params
 
 
-def run_rapidocr(image_path, config_path, engine=None):
+def run_rapidocr(image_path, config_path, model=None):
     config = load_config(config_path)
     settings = config.get("ocr_settings", {})
     preprocessing_settings = config.get("preprocessing", {}) or {}
@@ -114,14 +114,14 @@ def run_rapidocr(image_path, config_path, engine=None):
     # --- load_time_seconds ---
     # EasyOCR/doctr/TrOCR'daki gibi burada da GERÇEK bir maliyet var:
     # RapidOCR(...) detection + classification + recognition modellerini
-    # yükler. engine dışarıdan enjekte edilmemişse (main.py her görsel için
+    # yükler. model dışarıdan enjekte edilmemişse (main.py her görsel için
     # yeniden oluşturuyorsa) bu maliyet her çağrıda tekrar tekrar ödenir.
-    if engine is None:
+    if model is None:
         load_start = time.time()
         try:
             rapidocr_params = {"Rec.lang_type": lang_type}
             rapidocr_params.update(build_rapidocr_params(settings))
-            engine = RapidOCR(params=rapidocr_params)
+            model = RapidOCR(params=rapidocr_params)
         except Exception as e:
             raise RuntimeError(
                 f"RapidOCR motoru oluşturulamadı (lang_type={lang_type}, "
@@ -132,7 +132,7 @@ def run_rapidocr(image_path, config_path, engine=None):
             ) from e
         load_time = round(time.time() - load_start, 4)
     else:
-        # Engine dışarıdan (main.py'de bir kez oluşturulup tüm görseller
+        # Model dışarıdan (main.py'de bir kez oluşturulup tüm görseller
         # için tekrar kullanılıyorsa) geldiyse, bu çağrıda yükleme yok.
         load_time = 0.0
 
@@ -187,8 +187,8 @@ def run_rapidocr(image_path, config_path, engine=None):
     # return_single_char_box, text_score, box_thresh, unclip_ratio gibi
     # __call__'ın desteklediği HER parametre, config'e eklemeniz yeterli
     # olacak şekilde otomatik çalışır — kod değişikliği gerekmez.
-    valid_call_kwargs = filter_valid_kwargs(engine.__call__, call_settings)
-    result = engine(ocr_input, **valid_call_kwargs)
+    valid_call_kwargs = filter_valid_kwargs(model.__call__, call_settings)
+    result = model(ocr_input, **valid_call_kwargs)
 
     execution_time = round(time.time() - start_time, 4)  # Süre BURADA donar
 
@@ -299,12 +299,12 @@ if __name__ == "__main__":
 
     # --- ÖNEMLİ: main.py entegrasyonu için ---
     # Diğer 4 motordaki ile AYNI sorun burada da var: main.py her görsel
-    # için run_rapidocr(img, config) çağırırken `engine` parametresini hiç
+    # için run_rapidocr(img, config) çağırırken `model` parametresini hiç
     # vermiyorsa, RapidOCR(...) HER GÖRSEL İÇİN YENİDEN YÜKLENİR. main.py
     # güncellemesinde (registry.py) engine'i BİR KEZ kurup tüm görseller
     # için paylaşmamız gerekiyor:
     #
     #   from rapidocr import RapidOCR
-    #   shared_engine = RapidOCR(params={"Rec.lang_type": "tr"})
+    #   shared_model = RapidOCR(params={"Rec.lang_type": "tr"})
     #   for img_path in tüm_görseller:
-    #       result = run_rapidocr(img_path, config_path, engine=shared_engine)
+    #       result = run_rapidocr(img_path, config_path, model=shared_model)
