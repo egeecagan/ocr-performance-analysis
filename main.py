@@ -1,8 +1,37 @@
+"""
+main.py
+
+Entry point for running the OCR pipeline across one or more engine/model
+combinations. For each (engine, model_name) pair passed to
+process_pipeline():
+
+  - loads the engine's model/reader ONCE (via runners/registry.py), if it
+    has a real loading cost,
+  - runs every image in inputs/images/ through the engine's run_function,
+  - scores the result against per-image ground truth (inputs/truths/*.yaml)
+    and against document-type-specific common fields
+    (inputs/truths/common_fields/), both via the LCS/CER matcher in
+    runners/lcs_cer.py,
+  - writes one JSON file per image to outputs/<engine>/<model_name>/.
+
+Running this file directly (`python main.py`) clears outputs/, processes
+the (engine, model_name) pairs listed in the `if __name__ == "__main__":`
+block below, and then generates the aggregate comparison report via
+generate_report.py.
+
+=== TO RUN A NEW ENGINE/MODEL ===
+Add a process_pipeline("<engine>", "<model_name>") call in the
+`if __name__ == "__main__":` block. `<engine>` must be a key in
+runners/registry.py's ENGINES dict; `<model_name>` must match an existing
+configurations/<engine>/<model_name>.yaml file.
+"""
+
 import os
 import json
 import time
 import shutil
 from pathlib import Path
+from typing import Any
 import yaml
 from runners.registry import ENGINES
 from runners.accuracy import (
@@ -12,16 +41,6 @@ from runners.accuracy import (
 from runners.lcs_cer import check_all_fields_lcs_cer_with_bbox, enrich_words_with_field_matches_lcs
 from generate_report import generate_report
 
-# =============================================================================
-# Base paths
-# =============================================================================
-# All paths are resolved relative to this file's own location, so main.py
-# works correctly no matter which directory you run it from. It expects:
-#   inputs/images/                      - input images
-#   inputs/truths/                      - optional ground-truth .yaml files
-#   configurations/<engine>/<name>.yaml - per-engine config files
-#   outputs/                            - created automatically if missing
-# =============================================================================
 BASE_DIR = Path(__file__).resolve().parent
 
 IMAGE_DIR = BASE_DIR / "inputs" / "images"
@@ -32,8 +51,7 @@ CONFIGS_DIR = BASE_DIR / "configurations"
 
 PROCESSED_MODELS = []
 
-
-def load_ground_truth(img_name, truths_dir=TRUTHS_DIR):
+def load_ground_truth(img_name: str, truths_dir: str | Path = TRUTHS_DIR) -> tuple[dict[str, Any] | None, bool]:
     """
     Loads the ground-truth YAML file matching an image, if one exists.
     Example: image1.png -> inputs/truths/image1.yaml
@@ -49,7 +67,6 @@ def load_ground_truth(img_name, truths_dir=TRUTHS_DIR):
         with open(truth_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
-            # if data is none then it returns empty dictionary!!!
             if data is None:
                 return None, False
 
@@ -57,7 +74,7 @@ def load_ground_truth(img_name, truths_dir=TRUTHS_DIR):
     return None, False
 
 
-def process_pipeline(engine, model_name):
+def process_pipeline(engine: str, model_name: str) -> None:
     if engine not in ENGINES:
         print(f"Error: '{engine}' is not registered in registry.py.")
         print(f"Registered engines: {list(ENGINES.keys())}")
@@ -66,7 +83,6 @@ def process_pipeline(engine, model_name):
     engine_spec = ENGINES[engine]
     run_function = engine_spec["run_function"]
     loader = engine_spec["loader"]
-    shared_kwargs_map = engine_spec["shared_kwargs"]
 
     output_dir = OUTPUTS_DIR / engine / model_name
     config_path = CONFIGS_DIR / engine / f"{model_name}.yaml"
@@ -77,7 +93,7 @@ def process_pipeline(engine, model_name):
     # Load the model/reader/processor ONCE, share it across all images
     # =========================================================================
     # If `loader` is set, it's called a single time here, and the resulting
-    # object(s) are passed into every run_function call via shared_kwargs.
+    # object is passed into every run_function call as the `model` kwarg.
     # This avoids reloading the model for every image (which would be slow
     # and pointless for heavier engines like TrOCR or doctr). `loader` is
     # None for engines with no real loading cost (e.g. Tesseract).
@@ -102,8 +118,7 @@ def process_pipeline(engine, model_name):
             )
             return
         shared_load_time = round(time.time() - load_start, 4)
-        for loaded_key, kwarg_name in shared_kwargs_map.items():
-            shared_objects[kwarg_name] = loaded[loaded_key]
+        shared_objects["model"] = loaded["model"]
         print(f"[{engine.upper()}] Model loaded ({shared_load_time}s), processing images.")
 
     image_files = sorted(
@@ -126,38 +141,36 @@ def process_pipeline(engine, model_name):
         output_data["has_ground_truth"] = has_ground_truth
 
         # =====================================================================
-        # Field-based accuracy (ground truth varsa)
+        # Field-based accuracy (if ground truth exists)
         # =====================================================================
-        # ground_truth_data, inputs/truths/*.yaml dosyasının TAMAMI —
-        # {"fields": {...}} şeklinde. TÜM doğruluk kontrolü artık lcs_cer.py
-        # (longest-common-substring konumlandırma + Levenshtein tabanlı
-        # CER/WER) üzerinden yapılıyor — accuracy.py'deki eski fuzzy tabanlı
-        # check_all_fields ARTIK KULLANILMIYOR. check_all_fields_lcs_cer_
-        # with_bbox, "words" listesi (bbox'lı kutular) üzerinde çalıştığı
-        # için, her alan sonucu KENDİ piksel konumunu (bbox/bboxes) da
-        # taşıyor — web arayüzü bunu doğrudan JSON'dan okuyabilir, ayrıca
-        # hesaplama YAPMASI gerekmiyor.
+        # ground_truth_data is the FULL parsed content of inputs/truths/*.yaml
+        # — shaped as {"fields": {...}}. ALL accuracy checking now goes
+        # through lcs_cer.py (longest-common-substring alignment + Levenshtein
+        # based CER/WER); the old fuzzy-based check_all_fields in accuracy.py
+        # is NO LONGER USED. check_all_fields_lcs_cer_with_bbox operates on
+        # the "words" list (boxes with bboxes), so each field result also
+        # carries its OWN pixel location (bbox/bboxes) — a web frontend can
+        # read this straight from the JSON without recomputing anything.
         #
-        # fields boş/yoksa (örn. .yaml dosyası var ama "fields" bloğu
-        # tanımlı değilse), check_all_fields_lcs_cer_with_bbox zaten boş/
-        # None değerlerle güvenli şekilde dönüyor — burada ekstra bir
-        # kontrol gerekmiyor.
+        # If fields is empty/missing (e.g. the .yaml file exists but has no
+        # "fields" block), check_all_fields_lcs_cer_with_bbox already returns
+        # safe empty/None values — no extra check needed here.
         fields = (ground_truth_data or {}).get("fields", {})
 
-        # 1) Her "words" kutusunu, ground truth'taki HANGİ alana en çok
-        # benzediği bilgisiyle zenginleştir — web arayüzü mouse hover'da
-        # bu hazır veriyi okuyacak, kendi hesaplama YAPMAYACAK. ARTIK
-        # LCS/CER tabanlı (bkz. lcs_cer.py) — accuracy.py'deki eski fuzzy
-        # tabanlı enrich_words_with_field_matches ARTIK KULLANILMIYOR.
+        # 1) Enrich every "words" box with which ground-truth field it best
+        # matches — a web frontend can read this ready-made data on hover
+        # instead of computing it itself. Now LCS/CER based (see
+        # lcs_cer.py); the old fuzzy-based enrich_words_with_field_matches
+        # in accuracy.py is NO LONGER USED.
         if "words" in output_data:
             output_data["words"] = enrich_words_with_field_matches_lcs(
                 output_data["words"], fields
             )
 
-        # 2) Belge genelinde özet: kaç alan bulundu / toplam kaç alan,
-        # ARTIK LCS/CER yöntemiyle (bkz. lcs_cer.py). field_results
-        # içindeki HER alan artık matched_substring, cer, wer, bbox,
-        # bboxes, matched_word_indices alanlarını da taşıyor.
+        # 2) Document-level summary: how many fields were found out of the
+        # total, now via the LCS/CER method (see lcs_cer.py). Each entry in
+        # field_results also carries matched_substring, cer, wer, bbox,
+        # bboxes, and matched_word_indices.
         field_check = check_all_fields_lcs_cer_with_bbox(fields, output_data.get("words", []))
         output_data["fields_found"] = field_check["fields_found"]
         output_data["fields_total"] = field_check["fields_total"]
@@ -165,29 +178,27 @@ def process_pipeline(engine, model_name):
             round(field_check["fields_found"] / field_check["fields_total"], 4)
             if field_check["fields_total"] else None
         )
-        # field_results'ı da saklıyoruz — hangi alanın bulunup
-        # bulunmadığını, hangi metinle eşleştiğini VE HANGİ PİKSELDE
-        # olduğunu ayrıntılı görmek için (web arayüzünde sağ panelde,
-        # alan-bazlı bir liste + görsel üzerine kutu çizmek için
-        # kullanılabilir).
+        # We also keep field_results — a detailed record of which fields
+        # were found or not, what text they matched, AND at which pixel
+        # location (usable in a web frontend's side panel for a per-field
+        # list + drawing boxes on the image).
         output_data["field_results"] = field_check["field_results"]
 
         # =====================================================================
-        # Common (sabit/ortak) kelime kontrolü — ASIL ÖNCELİKLİ kontrol
+        # Common (fixed/shared) word check — the PRIMARY check
         # =====================================================================
-        # Yukarıdaki field_results, belgeye ÖZEL bilgileri (ad, tarih,
-        # tutar) kontrol ediyor — bunlar her görselde DEĞİŞİR. Buradaki
-        # kontrol ise her belge tipinde (örn. her dekontta, her ehliyette)
-        # HİÇ DEĞİŞMEYEN sabit kelimeleri (örn. "DEKONT", "SÜRÜCÜ BELGESİ")
-        # kontrol ediyor — inputs/truths/common_fields/<belge_tipi>.txt
-        # dosyasından okunur, görsel dosya adına göre OTOMATİK seçilir.
+        # field_results above checks document-SPECIFIC information (name,
+        # date, amount) — these CHANGE on every image. This check instead
+        # looks for the fixed words that NEVER change within a document type
+        # (e.g. "RECEIPT", "DRIVER'S LICENSE") — read from
+        # inputs/truths/common_fields/<document_type>.txt, selected
+        # AUTOMATICALLY based on the image filename.
         #
-        # İkisi PARALEL, birbirinden BAĞIMSIZ iki ayrı kontrol — biri
-        # diğerinin yerini almaz, ikisi de JSON'a ayrı alanlar olarak
-        # yazılır. İKİSİ DE artık AYNI (LCS/CER + bbox) yöntemi kullanıyor
-        # — accuracy.py'deki eski fuzzy tabanlı check_all_fields ve
-        # lcs_cer.py'deki eski (bbox'sız) check_all_fields_lcs_cer ARTIK
-        # KULLANILMIYOR.
+        # The two checks are PARALLEL and INDEPENDENT of each other — neither
+        # replaces the other, and both are written to the JSON as separate
+        # fields. BOTH now use the SAME (LCS/CER + bbox) method — the old
+        # fuzzy-based check_all_fields in accuracy.py and the old (bbox-less)
+        # check_all_fields_lcs_cer in lcs_cer.py are NO LONGER USED.
         common_fields_file = detect_common_fields_file(img_name, COMMON_FIELDS_DIR)
         common_fields = load_common_fields(common_fields_file) if common_fields_file else {}
 
@@ -201,9 +212,9 @@ def process_pipeline(engine, model_name):
             if common_field_check["fields_total"] else None
         )
         output_data["common_field_results"] = common_field_check["field_results"]
-        # Hangi .txt dosyasının kullanıldığını da saklıyoruz — debug için
-        # ve web arayüzünde "bu görsel hangi belge tipi olarak algılandı"
-        # diye göstermek isterseniz işe yarar.
+        # We also keep which .txt file was used — useful for debugging, and
+        # for a web frontend that wants to show "this image was detected as
+        # this document type".
         output_data["common_fields_source"] = (
             str(common_fields_file) if common_fields_file else None
         )
@@ -231,16 +242,16 @@ def process_pipeline(engine, model_name):
 
 
 if __name__ == "__main__":
-    # Eski tüm çıktıları fiziksel olarak tamamen sil (Clean slate)
+    # Physically delete all previous outputs (clean slate)
     if OUTPUTS_DIR.exists():
-        print(f"[CLEANUP] outputs/ klasoru tamamen siliniyor...")
+        print(f"[CLEANUP] Deleting outputs/ directory entirely...")
         shutil.rmtree(OUTPUTS_DIR)
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
     process_pipeline("tesseract", "model_v1")
 
-    # Tüm pipeline'lar bittikten sonra karşılaştırma raporunu otomatik üret
-    print("\n[REPORT] Karsilastirma raporu olusturuluyor...")
+    # Automatically generate the comparison report once all pipelines are done
+    print("\n[REPORT] Generating comparison report...")
     generate_report(
         outputs_dir=str(OUTPUTS_DIR),
         common_fields_dir=str(COMMON_FIELDS_DIR),
