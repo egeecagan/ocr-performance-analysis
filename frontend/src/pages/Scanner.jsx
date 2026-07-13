@@ -16,16 +16,16 @@ const API = 'http://localhost:8000'
 
 export default function Scanner() {
   // ── State ──────────────────────────────────────────────────────────────────
-  const [engines,    setEngines]    = useState({})          // {engine: [model,...]}
-  const [engine,     setEngine]     = useState('')
-  const [modelName,  setModelName]  = useState('')
-  const [file,       setFile]       = useState(null)        // File object
+  const [engines, setEngines] = useState({})          // {engine: [model,...]}
+  const [engine, setEngine] = useState('')
+  const [modelName, setModelName] = useState('')
+  const [file, setFile] = useState(null)        // File object
   const [previewUrl, setPreviewUrl] = useState(null)        // object URL
-  const [imgSize,    setImgSize]    = useState(null)        // {w, h} piksel
-  const [result,     setResult]     = useState(null)        // API yaniti
-  const [loading,    setLoading]    = useState(false)
-  const [error,      setError]      = useState(null)
-  const [dragOver,   setDragOver]   = useState(false)
+  const [imgSize, setImgSize] = useState(null)        // {w, h} piksel
+  const [result, setResult] = useState(null)        // API yaniti
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [dragOver, setDragOver] = useState(false)
 
   const [clearStatus, setClearStatus] = useState(null)
 
@@ -74,9 +74,9 @@ export default function Scanner() {
   }, [])
 
   // ── Drag-and-drop ─────────────────────────────────────────────────────────
-  const onDragOver  = (e) => { e.preventDefault(); setDragOver(true) }
-  const onDragLeave = ()  => setDragOver(false)
-  const onDrop      = (e) => {
+  const onDragOver = (e) => { e.preventDefault(); setDragOver(true) }
+  const onDragLeave = () => setDragOver(false)
+  const onDrop = (e) => {
     e.preventDefault()
     setDragOver(false)
     const f = e.dataTransfer.files[0]
@@ -91,8 +91,8 @@ export default function Scanner() {
     setResult(null)
     try {
       const form = new FormData()
-      form.append('file',       file)
-      form.append('engine',     engine)
+      form.append('file', file)
+      form.append('engine', engine)
       form.append('model_name', modelName)
       const { data } = await axios.post(`${API}/process`, form)
       setResult(data)
@@ -107,7 +107,7 @@ export default function Scanner() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-        <h2 className="section-heading" style={{ margin: 0 }}>🔍 Belge Tarama ve Analiz</h2>
+        <h2 className="section-heading" style={{ margin: 0 }}>Belge Tarama ve Analiz</h2>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <button
             className="btn btn-ghost"
@@ -141,7 +141,7 @@ export default function Scanner() {
 
           {/* Model versiyonu dropdown */}
           <div className="form-group" style={{ minWidth: '180px' }}>
-            <label className="form-label">Model Versiyonu</label>
+            <label className="form-label">Konfigürasyon</label>
             <select
               className="form-select"
               value={modelName}

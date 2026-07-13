@@ -18,6 +18,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 # main.py'den OCR fonksiyonlarini ve yol sabitlerini aktar
 from main import (
@@ -96,6 +97,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve web_outputs directory statically
+app.mount("/web_outputs", StaticFiles(directory=str(WEB_OUTPUTS_DIR)), name="web_outputs")
 
 # =============================================================================
 # Endpoint: /engines — Kullanilabilir motor ve model listesi
@@ -251,8 +255,10 @@ async def process_image(
     except Exception as e:
         print(f"Error computing single file metrics: {e}")
 
+    result["filename"] = file.filename
+
     # Sonucu JSON olarak web_outputs/<engine>/<model_name>/ klasorune kaydet
-    saved_json_name = f"{Path(safe_filename).stem}.json"
+    saved_json_name = f"uploaded_{timestamp}_{Path(safe_filename).stem}.json"
     saved_json_path = saved_dir / saved_json_name
     with open(saved_json_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=4)
@@ -327,6 +333,113 @@ def get_report():
     with open(report_path, encoding="utf-8") as f:
         data = json.load(f)
     return data
+
+
+# =============================================================================
+# Endpoint: /past-reports — Gecmis raporlari listele
+# =============================================================================
+
+@app.get("/past-reports")
+def get_past_reports():
+    reports = []
+    if not WEB_OUTPUTS_DIR.exists():
+        return []
+        
+    for json_path in sorted(WEB_OUTPUTS_DIR.glob("**/*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            with open(json_path, encoding="utf-8") as f:
+                data = json.load(f)
+            
+            rel_path = json_path.relative_to(WEB_OUTPUTS_DIR)
+            if len(rel_path.parts) < 3:
+                continue
+                
+            engine = rel_path.parts[0]
+            model_name = rel_path.parts[1]
+            
+            # Ilgili gorsel dosyasini bulmaya calis
+            parent_dir = json_path.parent
+            img_file = None
+            stem = json_path.stem
+            img_extensions = [".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp"]
+            
+            # 1. Tam eslesen dosya adini ara
+            for ext in img_extensions:
+                candidate = parent_dir / f"{stem}{ext}"
+                if candidate.exists():
+                    img_file = candidate.name
+                    break
+                    
+            # 2. Eslesmediyse timestamp'e gore ara (uploaded_123456_...)
+            if not img_file:
+                parts = stem.split("_")
+                if len(parts) >= 2 and parts[0] == "uploaded":
+                    prefix = f"uploaded_{parts[1]}_"
+                    for f_item in parent_dir.iterdir():
+                        if f_item.is_file() and f_item.name.startswith(prefix) and f_item.suffix.lower() in img_extensions:
+                            img_file = f_item.name
+                            break
+                            
+            # 3. Hala yoksa dosya adina gore genel ara (legacy)
+            if not img_file:
+                for f_item in parent_dir.iterdir():
+                    if f_item.is_file() and stem in f_item.name and f_item.suffix.lower() in img_extensions:
+                        img_file = f_item.name
+                        break
+            
+            metrics = data.get("metrics", {})
+            filename = data.get("filename") or (img_file[20:] if img_file and img_file.startswith("uploaded_") else stem)
+            
+            reports.append({
+                "id": stem,
+                "engine": engine,
+                "model_name": model_name,
+                "filename": filename,
+                "timestamp": json_path.stat().st_mtime,
+                "image_url": f"/web_outputs/{engine}/{model_name}/{img_file}" if img_file else None,
+                "metrics": metrics,
+                "data": data
+            })
+        except Exception as e:
+            print(f"Past report parsing error ({json_path}): {e}")
+            continue
+            
+    return reports
+
+
+# =============================================================================
+# Endpoint: /past-reports/{engine}/{model_name}/{report_id} — Tekil rapor sil
+# =============================================================================
+
+@app.delete("/past-reports/{engine}/{model_name}/{report_id}")
+def delete_past_report(engine: str, model_name: str, report_id: str):
+    target_dir = WEB_OUTPUTS_DIR / engine / model_name
+    if not target_dir.exists():
+        raise HTTPException(status_code=404, detail="Gecmis rapor dizini bulunamadi.")
+        
+    json_file = target_dir / f"{report_id}.json"
+    if not json_file.exists():
+        raise HTTPException(status_code=404, detail="Rapor bulunamadi.")
+        
+    # JSON dosyasini sil
+    try:
+        json_file.unlink()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Rapor JSON'i silinirken hata: {e}")
+        
+    # Gorsel dosyasini sil
+    deleted_img = False
+    img_extensions = [".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp"]
+    for ext in img_extensions:
+        img_file = target_dir / f"{report_id}{ext}"
+        if img_file.exists():
+            try:
+                img_file.unlink()
+                deleted_img = True
+            except Exception as e:
+                print(f"Gorsel silinirken hata ({img_file}): {e}")
+                
+    return {"status": "success", "message": "Rapor basariyla silindi.", "deleted_image": deleted_img}
 
 
 # =============================================================================

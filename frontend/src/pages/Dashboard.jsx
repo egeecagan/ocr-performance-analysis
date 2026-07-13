@@ -263,7 +263,7 @@ export default function Dashboard() {
     <div>
       {/* Header controls with title and Run Pipeline button */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-        <h2 className="section-heading" style={{ margin: 0 }}>📊 Karşılaştırma & Performans Analizi</h2>
+        <h2 className="section-heading" style={{ margin: 0 }}>Karşılaştırma & Performans Analizi</h2>
         <button
           className="btn btn-primary"
           onClick={handleRunPipeline}

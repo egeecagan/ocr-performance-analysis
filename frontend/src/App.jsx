@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Dashboard from './pages/Dashboard'
-import Scanner   from './pages/Scanner'
+import Scanner from './pages/Scanner'
+import ReportsHistory from './pages/ReportsHistory'
 import './index.css'
 
 export default function App() {
@@ -11,11 +12,6 @@ export default function App() {
       {/* ── Topbar ── */}
       <header className="topbar">
         <div className="topbar-brand">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2"/>
-            <path d="M9 9h6M9 12h6M9 15h4"/>
-          </svg>
           OCR Performance Analysis
         </div>
 
@@ -24,21 +20,28 @@ export default function App() {
             className={`nav-btn ${tab === 'scanner' ? 'active' : ''}`}
             onClick={() => setTab('scanner')}
           >
-            🔍 Belge Tarama
+            Belge Tarama
           </button>
           <button
             className={`nav-btn ${tab === 'dashboard' ? 'active' : ''}`}
             onClick={() => setTab('dashboard')}
           >
-            📊 Karşılaştırma
+            Karşılaştırma
+          </button>
+          <button
+            className={`nav-btn ${tab === 'history' ? 'active' : ''}`}
+            onClick={() => setTab('history')}
+          >
+            Geçmiş Raporlar
           </button>
         </nav>
       </header>
 
       {/* ── İçerik ── */}
       <main className="page">
-        {tab === 'scanner'   && <Scanner />}
+        {tab === 'scanner' && <Scanner />}
         {tab === 'dashboard' && <Dashboard />}
+        {tab === 'history' && <ReportsHistory />}
       </main>
     </div>
   )
