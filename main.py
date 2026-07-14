@@ -51,6 +51,63 @@ CONFIGS_DIR = BASE_DIR / "configurations"
 
 PROCESSED_MODELS = []
 
+
+def detect_common_fields_by_content(words: list, common_fields_dir: Path) -> Path | None:
+    """
+    Dosya adından belge türü tespit EDILEMEYEN durumlarda (örn. kullanıcı
+    'photo.jpg' ya da 'IMG_1234.jpg' gibi genel bir isimle dosya yüklediğinde)
+    devreye giren içerik tabanlı otomatik belge türü algılayıcı.
+
+    Mevcut tüm _c.txt dosyalarını tarar ve OCR çıktısındaki kelimelerle
+    karşılaştırır; en fazla kelime eşleşmesi veren türü döner.
+
+    Parametreler:
+        words           : OCR çıktısındaki kelime listesi (her biri dict,
+                          'text' anahtarı içeriyor)
+        common_fields_dir: inputs/truths/common_fields/ dizini
+
+    Döner:
+        En iyi eşleşen _c.txt dosyasının Path'i, ya da hiç eşleşme
+        yoksa None.
+    """
+    from runners.accuracy import normalize_text
+    from rapidfuzz import fuzz
+
+    # Belge türünü tespit edebilmek için OCR metnini geçici olarak
+    # hem Türkçe hem de ASCII olarak normalize edilmiş tek bir string'e çeviriyoruz.
+    # Bu işlem sadece sınıflandırma amaçlıdır, gerçek metrikleri etkilemez.
+    ocr_text = normalize_text(
+        " ".join(w.get("text", "") for w in words if isinstance(w, dict)),
+        ascii_normalize=True
+    )
+
+    if not ocr_text.strip():
+        return None
+
+    best_file  = None
+    best_score = 0
+
+    for txt_path in common_fields_dir.glob("*_c.txt"):
+        cf = load_common_fields(txt_path)   # {kelime: kelime}
+        if not cf:
+            continue
+
+        matched = 0
+        for field_val in cf.values():
+            norm_val = normalize_text(field_val, ascii_normalize=True)
+            # Kelimenin kendisi OCR metninde fuzzy olarak %65 ve üzeri oranla geçiyor mu?
+            # Bu, okuma hataları olsa bile belgenin kimlik/dekont olduğunu saptamamızı sağlar.
+            if norm_val and fuzz.partial_ratio(norm_val, ocr_text) >= 65.0:
+                matched += 1
+
+        # En az 1 eşleşme gereken kısmen/tam eşleşme için "kelime adedi" skoru
+        score = matched
+        if score > best_score:
+            best_score = score
+            best_file  = txt_path
+
+    return best_file if best_score > 0 else None
+
 def load_ground_truth(img_name: str, truths_dir: str | Path = TRUTHS_DIR) -> tuple[dict[str, Any] | None, bool]:
     """
     Loads the ground-truth YAML file matching an image, if one exists.
@@ -74,7 +131,124 @@ def load_ground_truth(img_name: str, truths_dir: str | Path = TRUTHS_DIR) -> tup
     return None, False
 
 
-def process_pipeline(engine: str, model_name: str) -> None:
+def process_single_image(img_path: str, engine: str, model_name: str, original_name: str = None) -> dict:
+    """
+    API tarafindan cagrilir. Tek bir gorsel dosyasini isler ve
+    OCR cikti sozlugunu (words, bbox, metrikler vb.) geri dondurur.
+
+    Parametreler:
+        img_path   : Gorselin tam dosya yolu (str)
+        engine     : Kullanilacak OCR motoru (ornek: 'tesseract')
+        model_name : Model versiyonu (ornek: 'model_v1')
+        original_name : Gorselin orijinal dosya adi (str, opsiyonel)
+
+    Doner:
+        OCR sonuc sozlugu (words, confidence, field_results ...)
+        veya hata durumunda {"error": "aciklama"} sozlugu.
+    """
+    if engine not in ENGINES:
+        return {"error": f"Engine '{engine}' kayitli degil. Gecerli motorlar: {list(ENGINES.keys())}"}
+
+    engine_spec = ENGINES[engine]
+    run_function = engine_spec["run_function"]
+    loader       = engine_spec["loader"]
+    shared_kwargs_map = engine_spec.get("shared_kwargs", {"model": "model"})
+
+    config_path = CONFIGS_DIR / engine / f"{model_name}.yaml"
+    if not config_path.exists():
+        return {"error": f"Konfigurasyon dosyasi bulunamadi: {config_path}"}
+
+    # Modeli yukle (once)
+    shared_objects = {}
+    shared_load_time = 0.0
+    if loader is not None:
+        load_start = time.time()
+        try:
+            loaded = loader(str(config_path))
+        except Exception as e:
+            return {"error": f"Model yuklenemedi: {e}"}
+        shared_load_time = round(time.time() - load_start, 4)
+        for loaded_key, kwarg_name in shared_kwargs_map.items():
+            shared_objects[kwarg_name] = loaded[loaded_key]
+
+    # OCR calistir
+    try:
+        output_data = run_function(str(img_path), str(config_path), **shared_objects)
+    except Exception as e:
+        return {"error": f"OCR islemi basarisiz: {e}"}
+
+    img_name = original_name if original_name else Path(img_path).name
+
+    # Ground truth (varsa)
+    ground_truth_data, has_ground_truth = load_ground_truth(img_name)
+    output_data["ground_truth"]     = ground_truth_data
+    output_data["has_ground_truth"] = has_ground_truth
+
+    fields = (ground_truth_data or {}).get("fields", {})
+
+    # Kelimeleri field eslesmesiyle zenginlestir
+    if "words" in output_data:
+        output_data["words"] = enrich_words_with_field_matches_lcs(
+            output_data["words"], fields
+        )
+
+    # Alan bazli dogruluk
+    field_check = check_all_fields_lcs_cer_with_bbox(fields, output_data.get("words", []))
+    output_data["fields_found"]       = field_check["fields_found"]
+    output_data["fields_total"]       = field_check["fields_total"]
+    output_data["field_match_ratio"]  = (
+        round(field_check["fields_found"] / field_check["fields_total"], 4)
+        if field_check["fields_total"] else None
+    )
+    output_data["field_results"]      = field_check["field_results"]
+
+    # Ortak alan kontrolu
+    # 1. Once dosya adina gore tespit dene (mevcut davranis)
+    common_fields_file = detect_common_fields_file(img_name, COMMON_FIELDS_DIR)
+    # 2. Bulunamazsa (dosya adi belge turunu yansitmiyorsa), OCR metnine
+    #    bakarak hangi _c.txt dosyasinin en cok kapsadigini bul
+    if common_fields_file is None:
+        common_fields_file = detect_common_fields_by_content(
+            output_data.get("words", []), COMMON_FIELDS_DIR
+        )
+    common_fields      = load_common_fields(common_fields_file) if common_fields_file else {}
+    common_field_check = check_all_fields_lcs_cer_with_bbox(
+        common_fields, output_data.get("words", [])
+    )
+    output_data["common_fields_found"]       = common_field_check["fields_found"]
+    output_data["common_fields_total"]       = common_field_check["fields_total"]
+    output_data["common_field_match_ratio"]  = (
+        round(common_field_check["fields_found"] / common_field_check["fields_total"], 4)
+        if common_field_check["fields_total"] else None
+    )
+    output_data["common_field_results"]  = common_field_check["field_results"]
+    output_data["common_fields_source"]  = (
+        str(common_fields_file) if common_fields_file else None
+    )
+    output_data["load_time_seconds"]     = shared_load_time
+    output_data["load_time_is_shared"]   = loader is not None
+
+    return output_data
+
+
+def process_pipeline(
+    engine: str,
+    model_name: str,
+    image_files: list[str] | None = None,
+    output_subdir: str | None = None,
+) -> None:
+    """
+    engine, model_name ile OCR pipeline'ini calistirir.
+
+    Parametreler:
+        engine       : OCR motoru adi
+        model_name   : Konfigürasyon adi
+        image_files  : Islenecek gorsel yollarinin listesi. None ise
+                       IMAGE_DIR altindaki tum gorseller otomatik alinir.
+        output_subdir: outputs/ altinda olusturulacak alt klasor adi
+                       (ornek: 'custom_run_1720000000'). None ise
+                       klasik '<engine>/<model_name>' yolu kullanilir.
+    """
     if engine not in ENGINES:
         print(f"Error: '{engine}' is not registered in registry.py.")
         print(f"Registered engines: {list(ENGINES.keys())}")
@@ -84,7 +258,10 @@ def process_pipeline(engine: str, model_name: str) -> None:
     run_function = engine_spec["run_function"]
     loader = engine_spec["loader"]
 
-    output_dir = OUTPUTS_DIR / engine / model_name
+    if output_subdir:
+        output_dir = OUTPUTS_DIR / output_subdir / engine / model_name
+    else:
+        output_dir = OUTPUTS_DIR / engine / model_name
     config_path = CONFIGS_DIR / engine / f"{model_name}.yaml"
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -118,15 +295,23 @@ def process_pipeline(engine: str, model_name: str) -> None:
             )
             return
         shared_load_time = round(time.time() - load_start, 4)
-        shared_objects["model"] = loaded["model"]
+        shared_kwargs_map = engine_spec.get("shared_kwargs", {"model": "model"})
+        for loaded_key, kwarg_name in shared_kwargs_map.items():
+            shared_objects[kwarg_name] = loaded[loaded_key]
         print(f"[{engine.upper()}] Model loaded ({shared_load_time}s), processing images.")
 
-    image_files = sorted(
-        f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".png", ".jpg", ".jpeg"))
-    )
+    # image_files parametresi verilmisse o listeyi kullan (tam yollar);
+    # verilmemisse IMAGE_DIR altindaki tum gorselleri otomatik tara.
+    if image_files is not None:
+        resolved_images = [(Path(p).name, str(p)) for p in image_files]
+    else:
+        resolved_images = [
+            (f, str(IMAGE_DIR / f))
+            for f in sorted(os.listdir(IMAGE_DIR))
+            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+        ]
 
-    for img_name in image_files:
-        img_path = IMAGE_DIR / img_name
+    for img_name, img_path in resolved_images:
 
         try:
             output_data = run_function(str(img_path), str(config_path), **shared_objects)
@@ -200,6 +385,10 @@ def process_pipeline(engine: str, model_name: str) -> None:
         # fuzzy-based check_all_fields in accuracy.py and the old (bbox-less)
         # check_all_fields_lcs_cer in lcs_cer.py are NO LONGER USED.
         common_fields_file = detect_common_fields_file(img_name, COMMON_FIELDS_DIR)
+        if common_fields_file is None:
+            common_fields_file = detect_common_fields_by_content(
+                output_data.get("words", []), COMMON_FIELDS_DIR
+            )
         common_fields = load_common_fields(common_fields_file) if common_fields_file else {}
 
         common_field_check = check_all_fields_lcs_cer_with_bbox(
