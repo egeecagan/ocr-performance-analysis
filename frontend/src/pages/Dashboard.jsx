@@ -3,6 +3,7 @@
  *
  * Kullanıcı istediği görselleri ve model/config kombinasyonlarını seçerek
  * karşılaştırma çalıştırır. Rapor grafiklerini ve metrikleri gösterir.
+ * Çoklu belge türlerinde sekmeli geçiş desteği sunar.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -88,18 +89,19 @@ function ReportCharts({ rows, docTypeLabel }) {
   const [selected, setSelected] = useState(null)
   const sel = selected != null ? rows[selected] : null
 
+  // Grafik etiketlerinde karışıklığı önlemek için her zaman motor ve modeli gösterelim
   const barData = rows.map((r, i) => ({
-    name:    r.model === 'model_v1' ? r.engine : `${r.engine}/${r.model}`,
+    name:    `${r.engine}/${r.model}`,
     'CER %': r.cer, 'WER %': r.wer, 'Güven': r.conf,
     color:   PALETTE[i % PALETTE.length],
   }))
 
+  // Ölçek uyumsuzluğunu (saniyeler vs yüzdeler) çözmek için Hız (s) verisini radardan çıkarttık
   const radarData = [
     { metric: 'CER (düşük=iyi)', ...Object.fromEntries(rows.map(r => [`${r.engine}/${r.model}`, r.cer])) },
     { metric: 'WER (düşük=iyi)', ...Object.fromEntries(rows.map(r => [`${r.engine}/${r.model}`, r.wer])) },
     { metric: 'Güven %',         ...Object.fromEntries(rows.map(r => [`${r.engine}/${r.model}`, r.conf])) },
     { metric: 'Hit Rate %',      ...Object.fromEntries(rows.map(r => [`${r.engine}/${r.model}`, r.hitRate])) },
-    { metric: 'Hız (s)',         ...Object.fromEntries(rows.map(r => [`${r.engine}/${r.model}`, r.speed])) },
   ].filter(d => Object.values(d).some(v => v != null && typeof v === 'number'))
 
   return (
@@ -219,6 +221,9 @@ export default function Dashboard() {
   const pollRef                          = useRef(null)
   const fileInputRef                     = useRef(null)
 
+  // Aktif Belge Türü Sekmesi
+  const [activeDocType, setActiveDocType] = useState(null)
+
   // Engine listesini getir
   const loadEngines = () => {
     axios.get(`${API}/engines`).then(r => setEngines(r.data)).catch(() => {})
@@ -302,6 +307,17 @@ export default function Dashboard() {
 
   const resultRows = result ? extractMetrics(result) : []
   const docTypes   = [...new Set(resultRows.map(r => r.docType))]
+
+  // Sonuçlar yüklendiğinde otomatik olarak ilk belge türünü seç
+  useEffect(() => {
+    if (docTypes.length > 0) {
+      if (!activeDocType || !docTypes.includes(activeDocType)) {
+        setActiveDocType(docTypes[0])
+      }
+    } else {
+      setActiveDocType(null)
+    }
+  }, [result])
 
   return (
     <div>
@@ -418,16 +434,29 @@ export default function Dashboard() {
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--text-primary)' }}>
             📊 Karşılaştırma Sonuçları
           </h3>
-          {docTypes.map(dt => (
-            <div key={dt} style={{ marginBottom: '2rem' }}>
-              <div style={{
-                fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)',
-                textTransform: 'uppercase', letterSpacing: '0.08em',
-                marginBottom: '1rem', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border)',
-              }}>{dt}</div>
-              <ReportCharts rows={resultRows.filter(r => r.docType === dt)} docTypeLabel={dt} />
+
+          {/* Geçişli Belge Türü Sekmeleri */}
+          {docTypes.length > 1 && (
+            <div className="sub-tabs" style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem' }}>
+              {docTypes.map(dt => (
+                <button
+                  key={dt}
+                  className={`nav-btn ${activeDocType === dt ? 'active' : ''}`}
+                  onClick={() => setActiveDocType(dt)}
+                  style={{ padding: '0.5rem 1.2rem', fontSize: '0.85rem', textTransform: 'capitalize' }}
+                >
+                  {dt === 'surucubelgesi' ? '🪪 Sürücü Belgesi' : dt === 'dekont' ? '🧾 Dekont' : dt === 'kimlik' ? '🪪 Kimlik Kartı' : `📄 ${dt}`}
+                </button>
+              ))}
             </div>
-          ))}
+          )}
+
+          {/* Aktif Sekmenin Grafik ve Rapor Tablosu */}
+          {activeDocType && (
+            <div key={activeDocType}>
+              <ReportCharts rows={resultRows.filter(r => r.docType === activeDocType)} docTypeLabel={activeDocType} />
+            </div>
+          )}
         </div>
       )}
 
