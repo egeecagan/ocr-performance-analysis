@@ -518,7 +518,7 @@ def compute_surucubelgesi_metrics(file_list: list, common_fields_dir) -> dict:
     }
 
 
-def compute_dekont_metrics(file_list: list, common_fields_dir) -> dict:
+def compute_dekont_metrics(file_list: list, common_fields_dir, doc_type: str = "dekont") -> dict:
     """
     Aynı model/versiyona ait tüm dekont dosyalarını (file_list) tek tek
     process_dekont ile işler ve nihai özet metrikleri üretir.
@@ -543,7 +543,7 @@ def compute_dekont_metrics(file_list: list, common_fields_dir) -> dict:
         "avg_total_time_seconds"       : avg(all_time),
         "avg_confidence"               : avg(all_conf),
         "common_fields"                : aggregate_common_fields(common_parts),
-        "specific_keyword_success_rates": compute_keyword_hit_rates(file_list, "dekont", common_fields_dir),
+        "specific_keyword_success_rates": compute_keyword_hit_rates(file_list, doc_type, common_fields_dir),
     }
 
 
@@ -656,11 +656,11 @@ def generate_report(
             if doc_type == "surucubelgesi":
                 metrics = compute_surucubelgesi_metrics(file_list, common_fields_dir)
             elif doc_type == "dekont":
-                metrics = compute_dekont_metrics(file_list, common_fields_dir)
+                metrics = compute_dekont_metrics(file_list, common_fields_dir, doc_type="dekont")
             else:
                 # Sürücü belgesi dışındaki diğer tüm belgeler (kimlik, fatura vb.)
                 # için dekont hesaplama mantığıyla ortak alan ve güven metriklerini hesapla
-                metrics = compute_dekont_metrics(file_list, common_fields_dir)
+                metrics = compute_dekont_metrics(file_list, common_fields_dir, doc_type=doc_type)
 
             report[doc_type][model_label] = metrics
 
