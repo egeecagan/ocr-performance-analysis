@@ -622,22 +622,8 @@ def generate_report(
 
             model_label = f"{model_dir.name}/{version_dir.name}"
             for jf in sorted(version_dir.glob("*.json")):
-                doc_type = None
-                try:
-                    with open(jf, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        cf_source = data.get("common_fields_source")
-                        if cf_source:
-                            doc_type = Path(cf_source).stem.split('_')[0].lower()
-                except Exception:
-                    pass
-
-                if not doc_type:
-                    doc_type = determine_doc_type(jf.stem)
-
-                if doc_type is None:
-                    continue
-                index[doc_type][model_label].append(jf)
+                img_key = jf.name
+                index[img_key][model_label].append(jf)
 
     if not index:
         print("Hic gecerli JSON bulunamadi.")
@@ -645,24 +631,38 @@ def generate_report(
 
     report: dict = {}
 
-    for doc_type in sorted(index.keys()):
-        report[doc_type] = {}
-        print(f"\n[{doc_type.upper()}]")
+    for img_key in sorted(index.keys()):
+        report[img_key] = {}
+        print(f"\n[{img_key.upper()}]")
 
-        for model_label in sorted(index[doc_type].keys()):
-            file_list = index[doc_type][model_label]
+        for model_label in sorted(index[img_key].keys()):
+            file_list = index[img_key][model_label]
             print(f"  {model_label}  ({len(file_list)} dosya)")
+
+            # Dosyanın gerçek belge türünü oku (kuralları belirlemek için)
+            doc_type = None
+            try:
+                with open(file_list[0], "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    cf_source = data.get("common_fields_source")
+                    if cf_source:
+                        doc_type = Path(cf_source).stem.split('_')[0].lower()
+            except Exception:
+                pass
+
+            if not doc_type:
+                doc_type = determine_doc_type(file_list[0].stem)
 
             if doc_type == "surucubelgesi":
                 metrics = compute_surucubelgesi_metrics(file_list, common_fields_dir)
             elif doc_type == "dekont":
                 metrics = compute_dekont_metrics(file_list, common_fields_dir, doc_type="dekont")
             else:
-                # Sürücü belgesi dışındaki diğer tüm belgeler (kimlik, fatura vb.)
-                # için dekont hesaplama mantığıyla ortak alan ve güven metriklerini hesapla
+                # Diğer belge türleri (kimlik, fatura vb.) için genel metrikleri dekont mantığıyla hesapla
                 metrics = compute_dekont_metrics(file_list, common_fields_dir, doc_type=doc_type)
 
-            report[doc_type][model_label] = metrics
+            metrics["doc_type"] = doc_type
+            report[img_key][model_label] = metrics
 
             cf = metrics.get("common_fields", {})
             print(

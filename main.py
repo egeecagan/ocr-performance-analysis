@@ -385,6 +385,10 @@ def process_pipeline(
         # fuzzy-based check_all_fields in accuracy.py and the old (bbox-less)
         # check_all_fields_lcs_cer in lcs_cer.py are NO LONGER USED.
         common_fields_file = detect_common_fields_file(img_name, COMMON_FIELDS_DIR)
+        if common_fields_file is None:
+            common_fields_file = detect_common_fields_by_content(
+                output_data.get("words", []), COMMON_FIELDS_DIR
+            )
         common_fields = load_common_fields(common_fields_file) if common_fields_file else {}
 
         common_field_check = check_all_fields_lcs_cer_with_bbox(

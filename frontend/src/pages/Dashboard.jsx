@@ -3,7 +3,7 @@
  *
  * Kullanıcı istediği görselleri ve model/config kombinasyonlarını seçerek
  * karşılaştırma çalıştırır. Rapor grafiklerini ve metrikleri gösterir.
- * Çoklu belge türlerinde sekmeli geçiş desteği sunar.
+ * Raporları her bir görsel/fotoğraf bazında sekmeli geçişle sunar.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -23,7 +23,7 @@ const PALETTE = ['#3b82f6', '#22c55e', '#f59e0b', '#a855f7', '#ef4444', '#06b6d4
 function extractMetrics(report) {
   if (!report || typeof report !== 'object') return []
   const rows = []
-  Object.entries(report).forEach(([docType, models]) => {
+  Object.entries(report).forEach(([imgKey, models]) => {
     if (typeof models !== 'object') return
     Object.entries(models).forEach(([engineModel, stats]) => {
       if (typeof stats !== 'object') return
@@ -43,9 +43,14 @@ function extractMetrics(report) {
       const kwVals     = Object.values(kwRates).filter(v => typeof v === 'number')
       const hitRate    = kwVals.length ? kwVals.reduce((a, b) => a + b, 0) / kwVals.length : null
       const fieldMatch = stats.avg_field_match_ratio ?? cf.avg_common_field_match_ratio ?? null
+      
+      const docType    = stats.doc_type ?? 'dekont'
+
       rows.push({
-        label: `${docType} · ${engine}/${model}`,
-        docType, engine, model,
+        label: `${imgKey} · ${engine}/${model}`,
+        docType,
+        imgKey, // Sekmeli geçiş için resim dosya adını kullanıyoruz
+        engine, model,
         cer:        cer        != null ? +(cer * 100).toFixed(2)        : null,
         wer:        wer        != null ? +(wer * 100).toFixed(2)        : null,
         conf:       conf       != null ? +conf.toFixed(2)               : null,
@@ -225,8 +230,8 @@ export default function Dashboard() {
   const pollRef                          = useRef(null)
   const fileInputRef                     = useRef(null)
 
-  // Aktif Belge Türü Sekmesi
-  const [activeDocType, setActiveDocType] = useState(null)
+  // Aktif Görsel Sekmesi
+  const [activeImgKey, setActiveImgKey] = useState(null)
 
   // Engine listesini getir
   const loadEngines = () => {
@@ -310,16 +315,16 @@ export default function Dashboard() {
   }
 
   const resultRows = result ? extractMetrics(result) : []
-  const docTypes   = [...new Set(resultRows.map(r => r.docType))]
+  const imgKeys    = [...new Set(resultRows.map(r => r.imgKey))]
 
-  // Sonuçlar yüklendiğinde otomatik olarak ilk belge türünü seç
+  // Sonuçlar yüklendiğinde otomatik olarak ilk görseli seç
   useEffect(() => {
-    if (docTypes.length > 0) {
-      if (!activeDocType || !docTypes.includes(activeDocType)) {
-        setActiveDocType(docTypes[0])
+    if (imgKeys.length > 0) {
+      if (!activeImgKey || !imgKeys.includes(activeImgKey)) {
+        setActiveImgKey(imgKeys[0])
       }
     } else {
-      setActiveDocType(null)
+      setActiveImgKey(null)
     }
   }, [result])
 
@@ -439,26 +444,26 @@ export default function Dashboard() {
             📊 Karşılaştırma Sonuçları
           </h3>
 
-          {/* Geçişli Belge Türü Sekmeleri */}
-          {docTypes.length > 1 && (
+          {/* Geçişli Görsel Sekmeleri */}
+          {imgKeys.length > 1 && (
             <div className="sub-tabs" style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem' }}>
-              {docTypes.map(dt => (
+              {imgKeys.map(img => (
                 <button
-                  key={dt}
-                  className={`nav-btn ${activeDocType === dt ? 'active' : ''}`}
-                  onClick={() => setActiveDocType(dt)}
-                  style={{ padding: '0.5rem 1.2rem', fontSize: '0.85rem', textTransform: 'capitalize' }}
+                  key={img}
+                  className={`nav-btn ${activeImgKey === img ? 'active' : ''}`}
+                  onClick={() => setActiveImgKey(img)}
+                  style={{ padding: '0.5rem 1.2rem', fontSize: '0.85rem' }}
                 >
-                  {dt === 'surucubelgesi' ? '🪪 Sürücü Belgesi' : dt === 'dekont' ? '🧾 Dekont' : dt === 'kimlik' ? '🪪 Kimlik Kartı' : `📄 ${dt}`}
+                  🖼️ {img.replace('.json', '')}
                 </button>
               ))}
             </div>
           )}
 
           {/* Aktif Sekmenin Grafik ve Rapor Tablosu */}
-          {activeDocType && (
-            <div key={activeDocType}>
-              <ReportCharts rows={resultRows.filter(r => r.docType === activeDocType)} docTypeLabel={activeDocType} />
+          {activeImgKey && (
+            <div key={activeImgKey}>
+              <ReportCharts rows={resultRows.filter(r => r.imgKey === activeImgKey)} docTypeLabel={activeImgKey.replace('.json', '')} />
             </div>
           )}
         </div>
