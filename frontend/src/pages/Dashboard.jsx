@@ -31,8 +31,12 @@ function extractMetrics(report) {
       const engine     = slashIdx > -1 ? engineModel.slice(0, slashIdx) : engineModel
       const model      = slashIdx > -1 ? engineModel.slice(slashIdx + 1) : ''
       const cf         = stats.common_fields ?? {}
-      const cer        = stats.avg_cer  ?? cf.avg_cer  ?? null
-      const wer        = stats.avg_wer  ?? cf.avg_wer  ?? null
+      let cer          = stats.avg_cer  ?? cf.avg_cer  ?? null
+      let wer          = stats.avg_wer  ?? cf.avg_wer  ?? null
+      if (cf.found_true_ratio === 0) {
+        if (cer === null) cer = 1.0;
+        if (wer === null) wer = 1.0;
+      }
       const conf       = stats.avg_confidence ?? null
       const speed      = stats.avg_total_time_seconds ?? null
       const kwRates    = stats.specific_keyword_success_rates ?? {}
