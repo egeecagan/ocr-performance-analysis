@@ -114,7 +114,7 @@ export default function Scanner() {
             onClick={handleClearWebOutputs}
             style={{ borderColor: 'var(--red)', color: 'var(--red)', fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
           >
-            🗑️ Tüm Web Çıktılarını Temizle
+            Tüm Web Çıktılarını Temizle
           </button>
           {clearStatus === 'success' && <span style={{ color: 'var(--green)', fontSize: '0.85rem' }}>✓ Temizlendi</span>}
           {clearStatus === 'error' && <span style={{ color: 'var(--red)', fontSize: '0.85rem' }}>✗ Hata oluştu</span>}

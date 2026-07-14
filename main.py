@@ -51,6 +51,57 @@ CONFIGS_DIR = BASE_DIR / "configurations"
 
 PROCESSED_MODELS = []
 
+
+def detect_common_fields_by_content(words: list, common_fields_dir: Path) -> Path | None:
+    """
+    Dosya adından belge türü tespit EDILEMEYEN durumlarda (örn. kullanıcı
+    'photo.jpg' ya da 'IMG_1234.jpg' gibi genel bir isimle dosya yüklediğinde)
+    devreye giren içerik tabanlı otomatik belge türü algılayıcı.
+
+    Mevcut tüm _c.txt dosyalarını tarar ve OCR çıktısındaki kelimelerle
+    karşılaştırır; en fazla kelime eşleşmesi veren türü döner.
+
+    Parametreler:
+        words           : OCR çıktısındaki kelime listesi (her biri dict,
+                          'text' anahtarı içeriyor)
+        common_fields_dir: inputs/truths/common_fields/ dizini
+
+    Döner:
+        En iyi eşleşen _c.txt dosyasının Path'i, ya da hiç eşleşme
+        yoksa None.
+    """
+    from runners.accuracy import normalize_text
+
+    # OCR metnini normalize edilmiş tek bir string'e çevir
+    ocr_text = normalize_text(
+        " ".join(w.get("text", "") for w in words if isinstance(w, dict))
+    )
+
+    if not ocr_text.strip():
+        return None
+
+    best_file  = None
+    best_score = 0
+
+    for txt_path in common_fields_dir.glob("*_c.txt"):
+        cf = load_common_fields(txt_path)   # {kelime: kelime}
+        if not cf:
+            continue
+
+        matched = 0
+        for field_val in cf.values():
+            norm_val = normalize_text(field_val)
+            if norm_val and norm_val in ocr_text:
+                matched += 1
+
+        # En az 1 eşleşme gereken kısmen/tam eşleşme için "kelime adedi" skoru
+        score = matched
+        if score > best_score:
+            best_score = score
+            best_file  = txt_path
+
+    return best_file if best_score > 0 else None
+
 def load_ground_truth(img_name: str, truths_dir: str | Path = TRUTHS_DIR) -> tuple[dict[str, Any] | None, bool]:
     """
     Loads the ground-truth YAML file matching an image, if one exists.
@@ -95,7 +146,7 @@ def process_single_image(img_path: str, engine: str, model_name: str, original_n
     engine_spec = ENGINES[engine]
     run_function = engine_spec["run_function"]
     loader       = engine_spec["loader"]
-    shared_kwargs_map = engine_spec["shared_kwargs"]
+    shared_kwargs_map = engine_spec.get("shared_kwargs", {"model": "model"})
 
     config_path = CONFIGS_DIR / engine / f"{model_name}.yaml"
     if not config_path.exists():
@@ -146,7 +197,14 @@ def process_single_image(img_path: str, engine: str, model_name: str, original_n
     output_data["field_results"]      = field_check["field_results"]
 
     # Ortak alan kontrolu
+    # 1. Once dosya adina gore tespit dene (mevcut davranis)
     common_fields_file = detect_common_fields_file(img_name, COMMON_FIELDS_DIR)
+    # 2. Bulunamazsa (dosya adi belge turunu yansitmiyorsa), OCR metnine
+    #    bakarak hangi _c.txt dosyasinin en cok kapsadigini bul
+    if common_fields_file is None:
+        common_fields_file = detect_common_fields_by_content(
+            output_data.get("words", []), COMMON_FIELDS_DIR
+        )
     common_fields      = load_common_fields(common_fields_file) if common_fields_file else {}
     common_field_check = check_all_fields_lcs_cer_with_bbox(
         common_fields, output_data.get("words", [])
@@ -167,7 +225,24 @@ def process_single_image(img_path: str, engine: str, model_name: str, original_n
     return output_data
 
 
-def process_pipeline(engine: str, model_name: str) -> None:
+def process_pipeline(
+    engine: str,
+    model_name: str,
+    image_files: list[str] | None = None,
+    output_subdir: str | None = None,
+) -> None:
+    """
+    engine, model_name ile OCR pipeline'ini calistirir.
+
+    Parametreler:
+        engine       : OCR motoru adi
+        model_name   : Konfigürasyon adi
+        image_files  : Islenecek gorsel yollarinin listesi. None ise
+                       IMAGE_DIR altindaki tum gorseller otomatik alinir.
+        output_subdir: outputs/ altinda olusturulacak alt klasor adi
+                       (ornek: 'custom_run_1720000000'). None ise
+                       klasik '<engine>/<model_name>' yolu kullanilir.
+    """
     if engine not in ENGINES:
         print(f"Error: '{engine}' is not registered in registry.py.")
         print(f"Registered engines: {list(ENGINES.keys())}")
@@ -177,7 +252,10 @@ def process_pipeline(engine: str, model_name: str) -> None:
     run_function = engine_spec["run_function"]
     loader = engine_spec["loader"]
 
-    output_dir = OUTPUTS_DIR / engine / model_name
+    if output_subdir:
+        output_dir = OUTPUTS_DIR / output_subdir / engine / model_name
+    else:
+        output_dir = OUTPUTS_DIR / engine / model_name
     config_path = CONFIGS_DIR / engine / f"{model_name}.yaml"
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -211,15 +289,23 @@ def process_pipeline(engine: str, model_name: str) -> None:
             )
             return
         shared_load_time = round(time.time() - load_start, 4)
-        shared_objects["model"] = loaded["model"]
+        shared_kwargs_map = engine_spec.get("shared_kwargs", {"model": "model"})
+        for loaded_key, kwarg_name in shared_kwargs_map.items():
+            shared_objects[kwarg_name] = loaded[loaded_key]
         print(f"[{engine.upper()}] Model loaded ({shared_load_time}s), processing images.")
 
-    image_files = sorted(
-        f for f in os.listdir(IMAGE_DIR) if f.lower().endswith((".png", ".jpg", ".jpeg"))
-    )
+    # image_files parametresi verilmisse o listeyi kullan (tam yollar);
+    # verilmemisse IMAGE_DIR altindaki tum gorselleri otomatik tara.
+    if image_files is not None:
+        resolved_images = [(Path(p).name, str(p)) for p in image_files]
+    else:
+        resolved_images = [
+            (f, str(IMAGE_DIR / f))
+            for f in sorted(os.listdir(IMAGE_DIR))
+            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+        ]
 
-    for img_name in image_files:
-        img_path = IMAGE_DIR / img_name
+    for img_name, img_path in resolved_images:
 
         try:
             output_data = run_function(str(img_path), str(config_path), **shared_objects)

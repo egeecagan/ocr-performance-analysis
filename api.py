@@ -290,6 +290,151 @@ def get_pipeline_status():
 
 
 # =============================================================================
+# Endpoint: /run-custom-pipeline — Seçili görsel + model kombinasyonlarını çalıştır
+# =============================================================================
+
+custom_pipeline_status = {"status": "idle", "progress": "", "error": None, "result": None}
+
+
+def run_custom_pipeline_task(image_paths: list, configs: list, run_id: str):
+    """
+    Kullanicinin sectigi gorseller ve model/config kombinasyonlariyla
+    pipeline'i calistirir. Her (engine, model_name) x gorsel kombinasyonu
+    ayri ayri islenir; sonuclar toplanip ozet rapor uretilir.
+    """
+    global custom_pipeline_status
+    custom_pipeline_status["status"] = "running"
+    custom_pipeline_status["progress"] = "Başlatılıyor..."
+    custom_pipeline_status["error"] = None
+    custom_pipeline_status["result"] = None
+
+    try:
+        import main
+        import json as _json
+        from generate_report import generate_report
+
+        # Ciktilari custom run'a ozel alt klasore yaz
+        output_subdir = f"custom_{run_id}"
+        custom_out_dir = main.OUTPUTS_DIR / output_subdir
+        custom_out_dir.mkdir(parents=True, exist_ok=True)
+
+        total = len(configs)
+        processed_models = []
+
+        for i, cfg in enumerate(configs):
+            eng = cfg["engine"]
+            mod = cfg["model_name"]
+            custom_pipeline_status["progress"] = (
+                f"Model çalıştırılıyor ({i+1}/{total}): {eng}/{mod}..."
+            )
+            main.process_pipeline(
+                engine=eng,
+                model_name=mod,
+                image_files=image_paths,
+                output_subdir=output_subdir,
+            )
+            processed_models.append((eng, mod))
+
+        # Rapor uret — generate_report'un report_path parametresini destekleyip
+        # desteklemedigine gore cagri yap
+        import inspect as _inspect
+        custom_pipeline_status["progress"] = "Karşılaştırma raporu oluşturuluyor..."
+        report_path = custom_out_dir / "comparison_report.json"
+
+        gr_sig = _inspect.signature(generate_report)
+        if "report_path" in gr_sig.parameters:
+            generate_report(
+                outputs_dir=str(custom_out_dir),
+                common_fields_dir=str(main.COMMON_FIELDS_DIR),
+                models_to_process=processed_models,
+                report_path=str(report_path),
+            )
+        else:
+            # Eski imza: report_path desteklenmiyor, OUTPUTS_DIR'a yazar
+            # Sonucu oradan kopyala
+            generate_report(
+                outputs_dir=str(custom_out_dir),
+                common_fields_dir=str(main.COMMON_FIELDS_DIR),
+                models_to_process=processed_models,
+            )
+
+        # Raporu oku ve result olarak sakla
+        if report_path.exists():
+            with open(report_path, encoding="utf-8") as f:
+                custom_pipeline_status["result"] = _json.load(f)
+
+        custom_pipeline_status["status"] = "success"
+        custom_pipeline_status["progress"] = "Tamamlandı."
+
+    except Exception as e:
+        custom_pipeline_status["status"] = "error"
+        custom_pipeline_status["progress"] = ""
+        custom_pipeline_status["error"] = str(e)
+
+
+@app.post("/run-custom-pipeline")
+async def run_custom_pipeline(
+    background_tasks: BackgroundTasks,
+    images: list[UploadFile] = File(..., description="Karşılaştırılacak görseller"),
+    configs: str = Form(..., description='JSON: [{"engine":"tesseract","model_name":"model_v1"}, ...]'),
+):
+    """
+    Kullanicinin sectigi gorseller + model/config kombinasyonlariyla
+    ozel karsilastirma pipeline'ini arka planda baslatir.
+    configs parametresi JSON string olarak gonderilir.
+    """
+    global custom_pipeline_status
+    if custom_pipeline_status["status"] == "running":
+        raise HTTPException(status_code=400, detail="Özel karşılaştırma zaten çalışıyor.")
+
+    import json as _json
+    import time as _time
+    try:
+        config_list = _json.loads(configs)
+    except Exception:
+        raise HTTPException(status_code=400, detail="configs geçerli bir JSON listesi değil.")
+
+    if not config_list:
+        raise HTTPException(status_code=400, detail="En az bir model/config seçmelisiniz.")
+    if not images:
+        raise HTTPException(status_code=400, detail="En az bir görsel yüklemelisiniz.")
+
+    # Gorselleri gecici klasore kaydet
+    run_id = str(int(_time.time()))
+    upload_dir = WEB_OUTPUTS_DIR / f"custom_{run_id}" / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths = []
+    for img in images:
+        suffix = Path(img.filename).suffix.lower()
+        if suffix not in {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Desteklenmeyen dosya tipi: {suffix}. PNG veya JPG gönderin.",
+            )
+        safe_name = Path(img.filename).name.replace(" ", "_")
+        dest = upload_dir / safe_name
+        with open(dest, "wb") as f:
+            shutil.copyfileobj(img.file, f)
+        saved_paths.append(str(dest))
+
+    background_tasks.add_task(
+        run_custom_pipeline_task, saved_paths, config_list, run_id
+    )
+    return {"status": "started", "run_id": run_id, "message": "Özel karşılaştırma başlatıldı."}
+
+
+# =============================================================================
+# Endpoint: /custom-pipeline-status — Özel pipeline durumunu sorgula
+# =============================================================================
+
+@app.get("/custom-pipeline-status")
+def get_custom_pipeline_status():
+    global custom_pipeline_status
+    return custom_pipeline_status
+
+
+# =============================================================================
 # Endpoint: /clear-web-outputs — web_outputs klasorunu temizle
 # =============================================================================
 

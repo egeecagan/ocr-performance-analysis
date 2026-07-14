@@ -68,10 +68,7 @@ def determine_doc_type(stem: str):
     "<belge_turu>_c.txt" dosyalarıyla eşleştirme için de kullanılır
     (bkz. load_specific_keywords).
     """
-    import re
-    # Hem alt tireli (surucubelgesi_1) hem de düz numaralı (surucubelgesi1)
-    # isimlendirmeleri desteklemek için dosya sonundaki rakam ve alt tireleri temizler.
-    return re.sub(r'[_0-9]+$', '', stem).lower()
+    return stem.split('_')[0].lower()
 
 
 def safe_float(value):
@@ -558,6 +555,7 @@ def generate_report(
     outputs_dir: str = "outputs",
     common_fields_dir: str = None,
     models_to_process: list = None,
+    report_path: str = None,
 ) -> None:
     """
     outputs/ dizinini baştan sona tarar, her (model, versiyon, belge türü)
@@ -593,8 +591,8 @@ def generate_report(
             "Scripti 'outputs/' klasörünün bir üst dizininden çalıştırın."
         )
 
-    # Eski raporu sil (her çalışmada sıfırdan başla)
-    out_path = base / "comparison_report.json"
+    # Rapor çıktı yolu: report_path verilmisse onu kullan, yoksa outputs_dir altı
+    out_path = Path(report_path) if report_path else base / "comparison_report.json"
     if out_path.exists():
         out_path.unlink()
         print("[REPORT] Eski rapor silindi, sifirdan uretiliyor...")
