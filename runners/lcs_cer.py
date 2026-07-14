@@ -164,7 +164,7 @@ def find_lcs_match(reference, predicted_text, ascii_normalize=True):
         return empty_result
 
     norm_ref = normalize_text(reference, ascii_normalize=ascii_normalize)
-    norm_pred = normalize_text(predicted_text, ascii_normalize=ascii_normalize)
+    norm_pred, position_map = _normalize_with_position_map(predicted_text, ascii_normalize=ascii_normalize)
 
     if not norm_ref or not norm_pred:
         return empty_result
@@ -175,12 +175,21 @@ def find_lcs_match(reference, predicted_text, ascii_normalize=True):
     if match.size == 0:
         return empty_result
 
-    matched_substring = norm_pred[match.b:match.b + match.size]
-    cer, wer = _compute_cer_wer(norm_ref, matched_substring)
+    matched_substring_normalized = norm_pred[match.b:match.b + match.size]
+    cer, wer = _compute_cer_wer(norm_ref, matched_substring_normalized)
+
+    # Orijinal ham metindeki eşleşen aralığı bul
+    if match.b < len(position_map):
+        raw_start = position_map[match.b]
+        last_idx = min(match.b + match.size, len(position_map)) - 1
+        raw_end = position_map[last_idx] + 1 if last_idx >= match.b else raw_start + 1
+        matched_substring_raw = predicted_text[raw_start:raw_end]
+    else:
+        matched_substring_raw = matched_substring_normalized
 
     return {
         "reference": reference,
-        "matched_substring": matched_substring,
+        "matched_substring": matched_substring_raw,
         "match_length": match.size,
         "found": cer <= CER_FOUND_THRESHOLD,
         "cer": cer,
@@ -408,15 +417,15 @@ def find_lcs_match_with_bbox(reference, words, ascii_normalize=True):
     if match.size == 0:
         return empty_result
 
-    matched_substring = norm_pred[match.b:match.b + match.size]
-    cer, wer = _compute_cer_wer(norm_ref, matched_substring)
+    matched_substring_normalized = norm_pred[match.b:match.b + match.size]
+    cer, wer = _compute_cer_wer(norm_ref, matched_substring_normalized)
 
     # --- Bulunan alt-dizenin (match.b .. match.b+match.size) konumunu
     # HAM metin karakter aralığına çevir ---
     if match.b >= len(position_map):
         return {
             "reference": reference,
-            "matched_substring": matched_substring,
+            "matched_substring": matched_substring_normalized,
             "match_length": match.size,
             "matched_word_indices": None,
             "bbox": None,
@@ -430,6 +439,9 @@ def find_lcs_match_with_bbox(reference, words, ascii_normalize=True):
     last_idx = min(match.b + match.size, len(position_map)) - 1
     raw_end = position_map[last_idx] + 1 if last_idx >= match.b else raw_start + 1
 
+    # Orijinal ham metindeki eşleşen alt-dizeyi al
+    matched_substring_raw = raw_text[raw_start:raw_end]
+
     # --- Bu ham aralıkla ÖRTÜŞEN kelime kutularını bul ---
     matched_word_indices = [
         idx for idx, (w_start, w_end) in enumerate(word_spans_raw)
@@ -439,7 +451,7 @@ def find_lcs_match_with_bbox(reference, words, ascii_normalize=True):
     if not matched_word_indices:
         return {
             "reference": reference,
-            "matched_substring": matched_substring,
+            "matched_substring": matched_substring_raw,
             "match_length": match.size,
             "matched_word_indices": None,
             "bbox": None,
@@ -459,7 +471,7 @@ def find_lcs_match_with_bbox(reference, words, ascii_normalize=True):
 
     return {
         "reference": reference,
-        "matched_substring": matched_substring,
+        "matched_substring": matched_substring_raw,
         "match_length": match.size,
         "matched_word_indices": matched_word_indices,
         "bbox": bbox,
