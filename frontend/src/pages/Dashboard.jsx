@@ -2,7 +2,7 @@
  * Dashboard.jsx — Özel Karşılaştırma
  *
  * Kullanıcı istediği görselleri ve model/config kombinasyonlarını seçerek
- * karşılaştırma çalıştırır. Yeni config eklendiğinde otomatik listelenir.
+ * karşılaştırma çalıştırır. Rapor grafiklerini ve metrikleri gösterir.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -219,9 +219,13 @@ export default function Dashboard() {
   const pollRef                          = useRef(null)
   const fileInputRef                     = useRef(null)
 
-  // Engine listesi — /engines her yeni YAML'ı otomatik içerir
-  useEffect(() => {
+  // Engine listesini getir
+  const loadEngines = () => {
     axios.get(`${API}/engines`).then(r => setEngines(r.data)).catch(() => {})
+  }
+
+  useEffect(() => {
+    loadEngines()
   }, [])
 
   // Tümünü seç / kaldır
@@ -346,16 +350,13 @@ export default function Dashboard() {
 
       {/* ── 2. Model / Config Seçimi ── */}
       <div className="card" style={{ marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
           <div className="card-title" style={{ margin: 0 }}>⚙️ Model / Konfigürasyon Seçimi</div>
           <button className="btn btn-ghost"
             style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }}
             onClick={toggleAll}>
             {allSelected ? 'Tümünü Kaldır' : 'Tümünü Seç'}
           </button>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            Yeni config eklendiğinde otomatik görünür
-          </span>
         </div>
 
         {Object.keys(engines).length === 0 ? (

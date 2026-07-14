@@ -101,10 +101,6 @@ app.add_middleware(
 # Serve web_outputs directory statically
 app.mount("/web_outputs", StaticFiles(directory=str(WEB_OUTPUTS_DIR)), name="web_outputs")
 
-# =============================================================================
-# Endpoint: /engines — Kullanilabilir motor ve model listesi
-# =============================================================================
-
 @app.get("/engines")
 def get_engines():
     """
@@ -121,6 +117,239 @@ def get_engines():
             if models:
                 result[engine_name] = models
     return result
+
+
+# =============================================================================
+# Konfigürasyon şeması: her engine için düzenlenebilir alan tanımları
+# =============================================================================
+
+_ENGINE_SCHEMA = {
+    "tesseract": {
+        "ocr_settings": [
+            {"key": "lang",  "label": "Dil (tanınacak dil/diller)",       "type": "str",    "default": "tur+eng"},
+            {"key": "psm",   "label": "PSM (sayfa bölümleme modu)",       "type": "select", "default": 6,
+             "options": [
+                 {"value": 3,  "desc": "3 — Otomatik, OSD yok"},
+                 {"value": 4,  "desc": "4 — Tek sütun"},
+                 {"value": 6,  "desc": "6 — Tek metin bloğu (makbuz)"},
+                 {"value": 7,  "desc": "7 — Tek satır"},
+                 {"value": 11, "desc": "11 — Dağınık metin"},
+             ]},
+            {"key": "oem",   "label": "OEM (motor modu)",                 "type": "select", "default": 3,
+             "options": [
+                 {"value": 0, "desc": "0 — Eski motor"},
+                 {"value": 1, "desc": "1 — Sadece LSTM"},
+                 {"value": 3, "desc": "3 — Otomatik (önerilen)"},
+             ]},
+            {"key": "dpi",   "label": "DPI (görüntü çözünürlüğü ipucu)", "type": "int",    "default": 300},
+        ],
+        "extra_params": [
+            {"key": "preserve_interword_spaces", "label": "Kelime arası boşluk koru",    "type": "bool", "default": 1},
+            {"key": "textord_heavy_nr",           "label": "Agresif gürültü temizle",    "type": "bool", "default": 0},
+            {"key": "tessedit_fix_fuzzy_spaces",  "label": "Belirsiz boşlukları düzelt", "type": "bool", "default": 1},
+            {"key": "tessedit_fix_hyphens",       "label": "Kısa çizgi birleştir",      "type": "bool", "default": 1},
+            {"key": "classify_bln_numeric_mode",  "label": "Yalnızca rakam modu",       "type": "bool", "default": 0},
+        ],
+    },
+    "easyocr": {
+        "reader_settings": [
+            {"key": "gpu",      "label": "GPU kullanımı",                        "type": "select", "default": "auto",
+             "options": [{"value": "auto", "desc": "Otomatik"}, {"value": True, "desc": "Zorla açık"}, {"value": False, "desc": "Zorla kapalı"}]},
+            {"key": "quantize", "label": "Quantize model (hız/hafıza tasarrufu)", "type": "bool",   "default": True},
+            {"key": "detector", "label": "Dedektör modeli yükle",                "type": "bool",   "default": True},
+            {"key": "recognizer", "label": "Tanıyıcı modeli yükle",               "type": "bool",   "default": True},
+        ],
+        "readtext_settings": [
+            {"key": "decoder",        "label": "Dekoder (çözümleme yöntemi)",        "type": "select", "default": "greedy",
+             "options": [{"value": "greedy", "desc": "Greedy (hızlı)"}, {"value": "beamsearch", "desc": "Beam search (doğru)"}, {"value": "wordbeamsearch", "desc": "Word beam search"}]},
+            {"key": "text_threshold", "label": "Metin eşiği (güven skoru min.)",    "type": "float", "default": 0.7},
+            {"key": "low_text",       "label": "Düşük metin alt sınırı",            "type": "float", "default": 0.4},
+            {"key": "link_threshold", "label": "Bağlantı eşiği (kutu birleştirme)", "type": "float", "default": 0.4},
+            {"key": "contrast_ths",   "label": "Kontrast eşiği (düşük kontrast)",   "type": "float", "default": 0.1},
+            {"key": "min_size",       "label": "Min. metin kutusu boyutu (piksel)",  "type": "int",   "default": 10},
+            {"key": "batch_size",     "label": "Toplu işlem boyutu (hız)",           "type": "int",   "default": 1},
+            {"key": "paragraph",      "label": "Paragraf birleştirme",               "type": "bool",  "default": False},
+        ],
+    },
+    "doctr": {
+        "model_settings": [
+            {"key": "det_arch",  "label": "Tespit modeli (algılama ağı)",          "type": "select", "default": "db_resnet50",
+             "options": [
+                 {"value": "db_resnet50",           "desc": "DB ResNet-50 (dengeli)"},
+                 {"value": "db_resnet34",           "desc": "DB ResNet-34 (hafif)"},
+                 {"value": "db_mobilenet_v3_large", "desc": "DB MobileNet (mobil)"},
+                 {"value": "fast_tiny",             "desc": "FAST Tiny (çok hızlı)"},
+                 {"value": "fast_small",            "desc": "FAST Small"},
+                 {"value": "fast_base",             "desc": "FAST Base (doğru)"},
+             ]},
+            {"key": "reco_arch", "label": "Tanıma modeli (karakter okuma ağı)",    "type": "select", "default": "crnn_vgg16_bn",
+             "options": [
+                 {"value": "crnn_vgg16_bn",           "desc": "CRNN VGG-16 (dengeli)"},
+                 {"value": "crnn_mobilenet_v3_small",  "desc": "CRNN MobileNet-S (hızlı)"},
+                 {"value": "crnn_mobilenet_v3_large",  "desc": "CRNN MobileNet-L"},
+                 {"value": "sar_resnet31",             "desc": "SAR ResNet-31 (doğru)"},
+                 {"value": "master",                   "desc": "MASTER (yüksek doğruluk)"},
+                 {"value": "parseq",                   "desc": "PARSeq (transformer)"},
+             ]},
+            {"key": "gpu",                   "label": "GPU kullanımı",                    "type": "select", "default": "auto",
+             "options": [{"value": "auto", "desc": "Otomatik"}, {"value": True, "desc": "Zorla açık"}, {"value": False, "desc": "Zorla kapalı"}]},
+            {"key": "assume_straight_pages", "label": "Düz sayfa varsay (döndürme yok)", "type": "bool", "default": True},
+            {"key": "preserve_aspect_ratio", "label": "En-boy oranını koru",             "type": "bool", "default": True},
+            {"key": "detect_orientation",    "label": "Sayfa yönünü algıla",             "type": "bool", "default": False},
+            {"key": "straighten_pages",      "label": "Eğik sayfaları düzelt",           "type": "bool", "default": False},
+        ],
+    },
+    "rapidocr": {
+        "ocr_settings": [
+            {"key": "lang_type", "label": "Dil (PP-OCR dil kodu)", "type": "select", "default": "tr",
+             "options": [{"value": "tr", "desc": "Türkçe"}, {"value": "en", "desc": "İngilizce"}, {"value": "ch", "desc": "Çince"}]},
+        ],
+        "model_selection": [
+            {"key": "Det.model_type", "label": "Tespit modeli boyutu (hız/doğruluk)", "type": "select", "default": "small",
+             "options": [
+                 {"value": "tiny",   "desc": "Tiny (en hızlı)"},
+                 {"value": "small",  "desc": "Small (dengeli)"},
+                 {"value": "mobile", "desc": "Mobile"},
+                 {"value": "medium", "desc": "Medium (doğru)"},
+                 {"value": "server", "desc": "Server (en doğru)"},
+             ]},
+            {"key": "Rec.model_type", "label": "Tanıma modeli boyutu (karakter okuma)", "type": "select", "default": "small",
+             "options": [
+                 {"value": "tiny",   "desc": "Tiny (en hızlı)"},
+                 {"value": "small",  "desc": "Small (dengeli)"},
+                 {"value": "medium", "desc": "Medium (doğru)"},
+             ]},
+        ],
+    },
+    "paddleocr": {
+        "ocr_settings": [
+            {"key": "lang",          "label": "Dil (PaddleOCR kodu)",              "type": "str",   "default": "tr"},
+            {"key": "use_angle_cls", "label": "Açı sınıflandırıcı (döndürme)",    "type": "bool",  "default": True},
+            {"key": "use_gpu",       "label": "GPU kullanımı",                     "type": "bool",  "default": False},
+            {"key": "det_db_thresh", "label": "Tespit eşiği (DB eşik değeri)",    "type": "float", "default": 0.3},
+            {"key": "rec_batch_num", "label": "Toplu tanıma boyutu (hız)",         "type": "int",   "default": 6},
+        ],
+    },
+}
+
+_PREPROCESSING_SCHEMA = [
+    {"key": "resize",              "label": "Görüntü büyütme (boyut artırma)",           "type": "bool", "default": False,
+     "params": [{"key": "resize_scale", "label": "Büyütme çarpanı (ör. 2.0 = 2x)", "type": "float", "default": 2.0}]},
+    {"key": "deskew",              "label": "Deskew (eğik metin düzeltme)",               "type": "bool", "default": False},
+    {"key": "autocrop_border",     "label": "Kenar kırpma (beyaz çerçeve kaldırma)",      "type": "bool", "default": False,
+     "params": [{"key": "autocrop_margin_ratio", "label": "Kenar boşluğu oranı (ör. 0.01)", "type": "float", "default": 0.01}]},
+    {"key": "illumination_correct","label": "Aydınlatma düzeltme (gölge/ışık dengeleme - aydınlatma)", "type": "bool", "default": False,
+     "params": [{"key": "illumination_kernel_size", "label": "Kernel boyutu (ör. 51, tek sayı)", "type": "int", "default": 51}]},
+    {"key": "grayscale",           "label": "Gri tonlama (renk → gri dönüşüm)",          "type": "bool", "default": False},
+    {"key": "clahe",               "label": "CLAHE (adaptif kontrast artırma)",            "type": "bool", "default": False,
+     "params": [
+         {"key": "clahe_clip_limit", "label": "Klip limiti (kontrast sınırı)",        "type": "float", "default": 2.0},
+         {"key": "clahe_grid_size",  "label": "Izgara boyutu (yerel alan büyüklüğü)", "type": "int",   "default": 8},
+     ]},
+    {"key": "denoise",             "label": "Gürültü giderme (karlı/parazitli görüntü)", "type": "bool", "default": False},
+    {"key": "sharpen",             "label": "Keskinleştirme (bulanık metin için)",        "type": "bool", "default": False},
+    {"key": "morphology",          "label": "Morfoloji (kalın/ince çizgi ayarı)",         "type": "bool", "default": False,
+     "params": [
+         {"key": "morphology_op",          "label": "İşlem tipi", "type": "select", "default": "dilate",
+          "options": [{"value": "dilate", "desc": "Dilate (kalınlaştır)"}, {"value": "erode", "desc": "Erode (incelt)"}]},
+         {"key": "morphology_kernel_size", "label": "Kernel boyutu (ör. 2)", "type": "int", "default": 2},
+     ]},
+    {"key": "threshold",           "label": "Eşikleme (siyah-beyaz binarizasyon)",        "type": "bool", "default": False,
+     "params": [
+         {"key": "threshold_block_size", "label": "Blok boyutu (tek sayı, ör. 35)", "type": "int",   "default": 35},
+         {"key": "threshold_c",          "label": "C sabiti (ör. 11)",               "type": "int",   "default": 11},
+     ]},
+]
+
+
+@app.get("/config-schema/{engine}")
+def get_config_schema(engine: str):
+    """
+    Belirtilen engine icin arayuzden duzenlenebilecek ayarlarin
+    sema bilgisini dondurur. Frontend bunu kullanarak dinamik form olusturur.
+    """
+    if engine not in ENGINES:
+        raise HTTPException(status_code=404, detail=f"Engine bulunamadi: {engine}")
+    return {
+        "engine":          engine,
+        "engine_settings": _ENGINE_SCHEMA.get(engine, {}),
+        "preprocessing":   _PREPROCESSING_SCHEMA,
+    }
+
+
+@app.post("/configs/{engine}")
+def create_config(engine: str, payload: dict):
+    """
+    Kullanicinin sectigi ayarlarla yeni bir YAML konfigürasyon dosyasi
+    olusturur ve configurations/<engine>/ altina kaydeder.
+    """
+    import yaml as _yaml
+    import re as _re
+
+    if engine not in ENGINES:
+        raise HTTPException(status_code=404, detail=f"Engine bulunamadi: {engine}")
+
+    config_name = (payload.get("config_name") or "").strip()
+    if not config_name:
+        raise HTTPException(status_code=400, detail="config_name bos olamaz.")
+
+    safe_name = _re.sub(r"[^a-zA-Z0-9_\-]", "_", config_name)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Gecersiz config_name.")
+
+    dest_dir  = CONFIGS_DIR / engine
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / f"{safe_name}.yaml"
+
+    if dest_path.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"'{safe_name}.yaml' zaten mevcut. Farkli bir isim girin.",
+        )
+
+    engine_settings = payload.get("engine_settings", {})
+    preprocessing   = payload.get("preprocessing", {})
+
+    doc = {"model_name": safe_name}
+
+    engine_schema = _ENGINE_SCHEMA.get(engine, {})
+    for block_key, fields in engine_schema.items():
+        block = {}
+        for field in fields:
+            fkey = field["key"]
+            val  = engine_settings.get(fkey, field["default"])
+            if "." in fkey:
+                parts = fkey.split(".", 1)
+                block.setdefault(parts[0], {})[parts[1]] = val
+            else:
+                block[fkey] = val
+
+        if block_key == "extra_params":
+            doc.setdefault("ocr_settings", {})["extra_params"] = block
+        elif block_key == "model_selection":
+            doc.setdefault("ocr_settings", {})["model_selection"] = block
+        else:
+            doc[block_key] = block
+
+    pre_block = {}
+    for step in _PREPROCESSING_SCHEMA:
+        skey = step["key"]
+        pre_block[skey] = preprocessing.get(skey, step["default"])
+        for param in step.get("params", []):
+            pkey = param["key"]
+            pre_block[pkey] = preprocessing.get(pkey, param["default"])
+    doc["preprocessing"] = pre_block
+
+    with open(dest_path, "w", encoding="utf-8") as f:
+        _yaml.dump(doc, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+    return {
+        "status":      "created",
+        "engine":      engine,
+        "config_name": safe_name,
+        "path":        str(dest_path),
+    }
+
 
 
 def compute_single_file_metrics(data: dict, filename: str) -> dict:
