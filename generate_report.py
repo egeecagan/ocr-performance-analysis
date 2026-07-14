@@ -622,7 +622,19 @@ def generate_report(
 
             model_label = f"{model_dir.name}/{version_dir.name}"
             for jf in sorted(version_dir.glob("*.json")):
-                doc_type = determine_doc_type(jf.stem)
+                doc_type = None
+                try:
+                    with open(jf, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        cf_source = data.get("common_fields_source")
+                        if cf_source:
+                            doc_type = Path(cf_source).stem.split('_')[0].lower()
+                except Exception:
+                    pass
+
+                if not doc_type:
+                    doc_type = determine_doc_type(jf.stem)
+
                 if doc_type is None:
                     continue
                 index[doc_type][model_label].append(jf)
@@ -646,7 +658,9 @@ def generate_report(
             elif doc_type == "dekont":
                 metrics = compute_dekont_metrics(file_list, common_fields_dir)
             else:
-                metrics = {"file_count": len(file_list), "note": "hesaplama kurali tanimli degil"}
+                # Sürücü belgesi dışındaki diğer tüm belgeler (kimlik, fatura vb.)
+                # için dekont hesaplama mantığıyla ortak alan ve güven metriklerini hesapla
+                metrics = compute_dekont_metrics(file_list, common_fields_dir)
 
             report[doc_type][model_label] = metrics
 

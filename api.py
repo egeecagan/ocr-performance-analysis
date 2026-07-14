@@ -367,7 +367,13 @@ def compute_single_file_metrics(data: dict, filename: str) -> dict:
         true_ratio,
     )
 
-    doc_type = determine_doc_type(Path(filename).stem)
+    # Öncelikli olarak içerikten algılanan ortak alan dosyasının ismini kontrol et
+    cf_source = data.get("common_fields_source")
+    if cf_source:
+        doc_type = Path(cf_source).stem.split('_')[0].lower()
+    else:
+        doc_type = determine_doc_type(Path(filename).stem)
+        
     if not doc_type:
         doc_type = "surucubelgesi"  # varsayılan
 

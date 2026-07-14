@@ -71,10 +71,12 @@ def detect_common_fields_by_content(words: list, common_fields_dir: Path) -> Pat
         yoksa None.
     """
     from runners.accuracy import normalize_text
+    from rapidfuzz import fuzz
 
-    # OCR metnini normalize edilmiş tek bir string'e çevir
+    # OCR metnini hem Türkçe hem de ASCII olarak normalize edilmiş tek bir string'e çevir
     ocr_text = normalize_text(
-        " ".join(w.get("text", "") for w in words if isinstance(w, dict))
+        " ".join(w.get("text", "") for w in words if isinstance(w, dict)),
+        ascii_normalize=True
     )
 
     if not ocr_text.strip():
@@ -90,8 +92,9 @@ def detect_common_fields_by_content(words: list, common_fields_dir: Path) -> Pat
 
         matched = 0
         for field_val in cf.values():
-            norm_val = normalize_text(field_val)
-            if norm_val and norm_val in ocr_text:
+            norm_val = normalize_text(field_val, ascii_normalize=True)
+            # Kelimenin kendisi OCR metninde fuzzy olarak %65 ve üzeri oranla geçiyor mu?
+            if norm_val and fuzz.partial_ratio(norm_val, ocr_text) >= 65.0:
                 matched += 1
 
         # En az 1 eşleşme gereken kısmen/tam eşleşme için "kelime adedi" skoru
