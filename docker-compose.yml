@@ -1,25 +1,3 @@
-# =============================================================================
-# PaddleOCR Container — docker-compose ile çalıştırma
-# =============================================================================
-# Kullanım:
-#   docker compose run --rm paddleocr
-#   docker compose run --rm paddleocr model_v2   <- farklı bir model_name ile
-#
-# Volume mount'lar proje kök dizinindeki inputs/, outputs/, configurations/
-# klasörlerini container'daki /data altına bağlar. Container PaddleOCR'ı
-# çalıştırıp JSON'ları DOĞRUDAN sizin outputs/paddleocr/ klasörünüze yazar
-# — Mac'teki main.py'nin diğer 5 motor için ürettiği JSON'larla aynı yerde,
-# aynı formatta durur.
-#
-# paddlex_model_cache: PaddleOCR ilk kullanımda model dosyalarını
-# internetten indirir (~/.paddlex/official_models/ altına). Bu volume
-# olmadan, container her "docker compose run" çağrısında SIFIRDAN
-# başlatılır (--rm bayrağı yüzünden) ve modelleri HER SEFERİNDE yeniden
-# indirir — yavaş ve gereksiz. Bu adlandırılmış (named) volume, indirilen
-# modelleri container'lar arasında KALICI tutar: ilk çalıştırmada indirme
-# olur, sonraki çalıştırmalarda diskten okunur.
-# =============================================================================
-
 services:
   paddleocr:
     build: .

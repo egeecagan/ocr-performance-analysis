@@ -1,19 +1,4 @@
-# =============================================================================
-# Ortak (sabit) kelimeler — SÜRÜCÜ BELGESİ / EHLİYET belgeleri
-# =============================================================================
-# Bu dosya, "surucubelgesi" (veya "surucu_belgesi") kelimesini içeren TÜM
-# görsel dosya adları için kullanılır — main.py dosya adından otomatik
-# olarak bu listeyi seçer.
-#
-# Buraya, HER ehliyette (kim olursa olsun) DEĞİŞMEDEN tekrar eden
-# kelimeleri ekleyin — sabit başlıklar, etiket kelimeleri, ülke adı gibi.
-# Kişiye özel bilgiler (ad, soyad, doğum tarihi, sınıflar) BURAYA DEĞİL,
-# ilgili görselin kendi .yaml dosyasındaki "fields" bloğuna gider (bkz.
-# inputs/truths/surucubelgesi1.yaml örneği).
-#
-# Format: her satırda BİR kelime/kelime grubu.
-# =============================================================================
-
-SÜRÜCÜ BELGESİ
-DRIVING LICENCE
-TÜRKİYE CUMHURİYETİ
+TÜRKİYE
+SÜRÜCÜ
+BELGESİ
+CUMHURİYETİ

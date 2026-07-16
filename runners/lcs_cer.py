@@ -311,60 +311,6 @@ def _normalize_with_position_map(text, ascii_normalize=True):
 
 
 def find_lcs_match_with_bbox(reference, words, ascii_normalize=True):
-    """
-    find_lcs_match'in BBOX-FARKINDA versiyonu — CER/WER hesaplama mantığı
-    TAMAMEN AYNI (tüm metin üzerinde longest-common-substring ile bulunan
-    alt-dizeyi, OLDUĞU GİBİ, referansla Levenshtein kıyaslaması), ama EK
-    olarak: bulunan alt-dizenin "words" listesindeki HANGİ kutu(lar)a
-    denk geldiğini bulup, o kutuların pikselini (bbox) de döndürür.
-
-    === Yöntem ===
-    1. "words" listesinden HAM metni yeniden oluştur: " ".join(kelimeler)
-       — runner'ların "text" alanını ürettiği yöntemin AYNISI. Aynı
-       zamanda her kelimenin bu ham metin içindeki [başlangıç, bitiş)
-       karakter aralığını da (word_spans_raw) kaydediyoruz.
-    2. Ham metni _normalize_with_position_map ile normalize et — normalize
-       edilmiş her karakterin ham metindeki karşılığını (position_map) da
-       elde ediyoruz.
-    3. find_lcs_match'teki AYNI longest-common-substring mantığıyla en iyi
-       eşleşmeyi (match.a, match.b, match.size) bul, CER/WER hesapla —
-       HİÇBİR pencere uzatma/tahmin YOK, sadece GERÇEKTEN bulunan kısım.
-    4. position_map kullanarak match.b .. match.b+match.size aralığını
-       HAM metin karakter aralığına çevir.
-    5. Bu ham aralıkla ÖRTÜŞEN "words" kutularını bul — bunlar eşleşmeyi
-       oluşturan GERÇEK OCR kutularıdır (rastgele/alakasız bir kelime
-       ASLA karışmaz, çünkü sadece GERÇEKTEN eşleşen karakterlerin
-       konumu kullanılıyor).
-
-    Parametreler:
-      reference: aranan sabit/beklenen metin (örn. "TÜRKİYE CUMHURİYETİ")
-      words: runner'ın ürettiği "words" listesi — her elemanda EN AZ
-        "text" ve "bbox": [x1, y1, x2, y2] alanları bulunmalı. Bu liste,
-        runner'ın "text" alanını ürettiği SIRAYLA olmalı.
-      ascii_normalize: bkz. find_lcs_match
-
-    Döndürür (dict):
-      reference, matched_substring, match_length, found, cer, wer: bkz.
-        find_lcs_match — BİREBİR AYNI anlam ve hesaplama.
-      matched_word_indices: eşleşen ham metin aralığıyla ÖRTÜŞEN "words"
-        listesindeki orijinal indeksler (örn. [17] — tek kutu).
-      bbox: [x1, y1, x2, y2] — matched_word_indices'teki TÜM kutuların
-        dış sınırlayıcı kutusu, web arayüzünde tek bir dikdörtgen olarak
-        vurgulamak için. Eşleşme bulunamadıysa None.
-      bboxes: matched_word_indices'teki HER kutunun KENDİ (ayrı, dar)
-        bbox'ı, liste halinde — "bbox" tek bir GENİŞ dikdörtgen olduğunda
-        (örn. eşleşen kelimeler belgede birbirinden uzaksa) web arayüzü
-        bunun yerine HER kelimeyi ayrı ayrı, dar bir kutuyla vurgulamak
-        isteyebilir.
-
-    reference veya words boş/None ise, ya da hiç ardışık eşleşme yoksa
-    ya da bulunan eşleşme yeterince iyi değilse (cer > CER_FOUND_
-    THRESHOLD): found=False döner. bbox/bboxes ise found=False'ta değil,
-    "gerçekten hiçbir words kutusuyla örtüşmedi" durumunda None olur —
-    yani found=False olsa bile bbox dolu gelebilir (kötü ama konumu belli
-    bir eşleşme), bu ayrımı web arayüzü "düşük güven" göstergesi olarak
-    kullanabilir.
-    """
     empty_result = {
         "reference": reference,
         "matched_substring": None,
@@ -380,7 +326,6 @@ def find_lcs_match_with_bbox(reference, words, ascii_normalize=True):
     if not reference or not words:
         return empty_result
 
-    # --- "words" listesinden HAM metni ve kelime konumlarını yeniden oluştur ---
     raw_text_parts = [w.get("text", "") for w in words]
     raw_text = " ".join(raw_text_parts)
 
@@ -393,7 +338,7 @@ def find_lcs_match_with_bbox(reference, words, ascii_normalize=True):
         start = cursor
         end = start + len(token)
         word_spans_raw.append((start, end))
-        cursor = end + 1  # +1: kelimeler arasına konan tek boşluk
+        cursor = end + 1  
 
     norm_ref = normalize_text(reference, ascii_normalize=ascii_normalize)
     norm_pred, position_map = _normalize_with_position_map(raw_text, ascii_normalize=ascii_normalize)
@@ -401,7 +346,6 @@ def find_lcs_match_with_bbox(reference, words, ascii_normalize=True):
     if not norm_ref or not norm_pred:
         return empty_result
 
-    # --- Longest common substring ile eşleşmeyi bul (find_lcs_match ile AYNI) ---
     matcher = SequenceMatcher(None, norm_ref, norm_pred, autojunk=False)
     match = matcher.find_longest_match(0, len(norm_ref), 0, len(norm_pred))
 
@@ -411,8 +355,6 @@ def find_lcs_match_with_bbox(reference, words, ascii_normalize=True):
     matched_substring = norm_pred[match.b:match.b + match.size]
     cer, wer = _compute_cer_wer(norm_ref, matched_substring)
 
-    # --- Bulunan alt-dizenin (match.b .. match.b+match.size) konumunu
-    # HAM metin karakter aralığına çevir ---
     if match.b >= len(position_map):
         return {
             "reference": reference,
@@ -471,25 +413,6 @@ def find_lcs_match_with_bbox(reference, words, ascii_normalize=True):
 
 
 def check_all_fields_lcs_cer_with_bbox(fields, words, ascii_normalize=True):
-    """
-    check_all_fields_lcs_cer ile AYNI arayüz mantığında, ama
-    find_lcs_match_with_bbox kullanan (bbox döndüren) versiyonu.
-
-    Parametreler:
-      fields: dict — {alan_adı: referans_metin} (genelde
-        load_common_fields'tan gelen common_fields sözlüğü)
-      words: runner'ın ürettiği "words" listesi (bbox'lı kutular) —
-        output_data["words"]
-      ascii_normalize: bkz. find_lcs_match
-
-    Döndürür (dict): check_all_fields_lcs_cer ile AYNI yapı
-      (field_results, fields_total, fields_found, average_cer,
-      average_wer) — field_results içindeki her elemanda EK olarak
-      "matched_word_indices", "bbox" ve "bboxes" alanları da bulunur.
-
-    fields veya words boş/None ise tüm sayılar 0, average_cer/
-    average_wer None döner.
-    """
     if not fields or not words:
         return {
             "field_results": {},
