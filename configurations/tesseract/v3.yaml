@@ -1,0 +1,32 @@
+model_name: v3
+ocr_settings:
+  lang: tur+eng
+  psm: 6
+  oem: 3
+  dpi: 300
+  extra_params:
+    preserve_interword_spaces: 1
+    textord_heavy_nr: 0
+    tessedit_fix_fuzzy_spaces: 1
+    tessedit_fix_hyphens: 1
+    classify_bln_numeric_mode: 0
+preprocessing:
+  resize: false
+  resize_scale: 2
+  deskew: true
+  autocrop_border: true
+  autocrop_margin_ratio: 0.01
+  illumination_correct: true
+  illumination_kernel_size: 51
+  grayscale: true
+  clahe: false
+  clahe_clip_limit: 2
+  clahe_grid_size: 8
+  denoise: true
+  sharpen: true
+  morphology: false
+  morphology_op: dilate
+  morphology_kernel_size: 2
+  threshold: true
+  threshold_block_size: 35
+  threshold_c: 11

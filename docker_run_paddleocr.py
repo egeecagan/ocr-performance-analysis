@@ -77,6 +77,7 @@ def main():
         use_doc_orientation_classify=settings.get("use_doc_orientation_classify", False),
         use_doc_unwarping=settings.get("use_doc_unwarping", False),
         use_textline_orientation=settings.get("use_textline_orientation", False),
+        enable_mkldnn=False,
     )
     print(f"[PADDLEOCR-DOCKER] Model yüklendi, görseller işleniyor.")
 

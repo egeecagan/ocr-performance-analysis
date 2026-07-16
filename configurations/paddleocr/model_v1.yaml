@@ -32,6 +32,7 @@ ocr_settings:
   use_doc_orientation_classify: false      # PaddleOCR'ın kendi belge-yönü düzeltmesi
   use_doc_unwarping: false                 # PaddleOCR'ın kendi kıvrım düzeltmesi
   use_textline_orientation: false          # PaddleOCR'ın kendi satır-yönü düzeltmesi
+  enable_mkldnn: false                     # CPU'da oneDNN (MKLDNN) hızlandırmasını kapatır (PIR executor hatasını önlemek için)
 
 preprocessing:
   resize: false

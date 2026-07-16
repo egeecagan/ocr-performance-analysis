@@ -145,6 +145,7 @@ def _load_paddleocr_engine(config_path):
     extra_init_kwargs.pop("use_doc_unwarping", None)
     extra_init_kwargs.pop("use_textline_orientation", None)
     extra_init_kwargs.pop("font_path", None)
+    extra_init_kwargs.setdefault("enable_mkldnn", False)
     
     engine = PaddleOCR(
         lang=lang,

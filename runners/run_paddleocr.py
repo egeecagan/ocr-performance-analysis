@@ -68,6 +68,7 @@ def run_paddleocr(image_path, config_path, engine=None):
     # font_path bizim kendi alanımız, PaddleOCR'ın gerçek bir parametresi
     # değil — **kwargs yüzünden filtrelenemediği için elle çıkarıyoruz.
     extra_init_kwargs.pop("font_path", None)
+    extra_init_kwargs.setdefault("enable_mkldnn", False)
 
     # call_settings: PaddleOCR.predict()'in (her görsel çağrısında) kabul
     # ettiği parametreler — EasyOCR'daki readtext_settings'in karşılığı.
