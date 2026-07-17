@@ -1,0 +1,111 @@
+# =============================================================================
+# RapidOCR — LOW-SPEC variant of model_v1.yaml
+# =============================================================================
+# Identical to model_v1.yaml in every way EXCEPT engine_settings below.
+# Used ONLY by the client-sim Docker service (see docker-compose.yml /
+# main.py's LOWSPEC_MODE check), which caps the container to `cpus: "1.0"`.
+#
+# Why this file needs to exist separately from model_v1.yaml:
+# ONNX Runtime's default intra_op_num_threads/inter_op_num_threads (-1,
+# "auto") size the thread pool off the CONTAINER'S VISIBLE core count
+# (nproc), not the real cgroup CPU quota — Docker's `cpus:` limit throttles
+# quota but does not change what nproc reports. Under a 1.0-cpu quota this
+# caused RapidOCR to spawn ~10 threads fighting over 1 core's worth of
+# time, making inference ~20x slower (35-40s/image instead of ~2s) with no
+# visible error — just a silent, misleading slowdown. Pinning both values
+# to 1 here matches the actual quota given to client-sim.
+#
+# On a normal (native, multi-core) machine you want the OPPOSITE — more
+# threads, not fewer — which is exactly what model_v1.yaml (engine_settings
+# omitted, defaults to -1/auto) still gives you. Keeping these as two
+# separate files means neither environment silently throttles the other.
+# =============================================================================
+
+model_name: "rapidocr_full_reference"
+
+ocr_settings:
+  lang_type: "tr"
+
+  font_path: null
+
+  model_selection:
+    Det:
+      model_type: "small"
+    Cls:
+      model_type: "mobile"
+    Rec:
+      model_type: "small"
+
+  advanced_settings:
+    Global:
+      text_score: 0.5
+      min_height: 30
+      width_height_ratio: 8
+      max_side_len: 2000
+      min_side_len: 30
+
+    Det:
+      thresh: 0.3
+      box_thresh: 0.5
+      max_candidates: 1000
+      unclip_ratio: 1.6
+      limit_side_len: 736
+      limit_type: "min"
+      use_dilation: true
+
+    Cls:
+      cls_thresh: 0.9
+      cls_batch_num: 6
+
+    Rec:
+      rec_batch_num: 6
+
+  # ---------------------------------------------------------------------
+  # engine_settings — ONNX Runtime CPU thread pool size (see run_rapidocr.py's
+  # build_rapidocr_params for how these map to EngineConfig.onnxruntime.*).
+  # Pinned to match client-sim's `cpus: "1.0"` limit in docker-compose.yml.
+  # If you change that limit, update this to match.
+  # ---------------------------------------------------------------------
+  engine_settings:
+    intra_op_num_threads: 1
+    inter_op_num_threads: 1
+
+call_settings:
+  use_det: true
+  use_cls: true
+  use_rec: true
+  return_word_box: false
+  return_single_char_box: false
+  text_score: 0.5
+  box_thresh: 0.5
+  unclip_ratio: 1.6
+
+preprocessing:
+  resize: false
+  resize_scale: 2.0
+
+  deskew: false
+
+  autocrop_border: false
+  autocrop_margin_ratio: 0.01
+
+  illumination_correct: false
+  illumination_kernel_size: 51
+
+  grayscale: false
+
+  clahe: false
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+
+  denoise: false
+
+  sharpen: false
+
+  morphology: false
+  morphology_op: "dilate"
+  morphology_kernel_size: 2
+
+  threshold: false
+  threshold_block_size: 35
+  threshold_c: 11

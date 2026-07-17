@@ -1,0 +1,11 @@
+.git/
+venv/
+.venv/
+__pycache__/
+*.pyc
+outputs/
+outputs_lowspec/
+inputs/images/
+*.pdf
+*.tex
+.DS_Store
