@@ -10,12 +10,13 @@ Calistirma:
     .\\venv\\Scripts\\uvicorn api:app --reload --port 8000
 """
 
+from database import SessionLocal
 import json
 import shutil
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, BackgroundTasks
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -29,6 +30,9 @@ from main import (
 )
 from runners.registry import ENGINES
 
+from sqlalchemy.orm import Session
+from database import get_db, Run, OCRResult
+
 WEB_OUTPUTS_DIR = BASE_DIR / "web_outputs"
 WEB_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -39,6 +43,17 @@ def run_full_pipeline_task():
     pipeline_status["status"] = "running"
     pipeline_status["progress"] = "Temizlik yapılıyor..."
     pipeline_status["error"] = None
+
+    db= SessionLocal()
+
+    db_run = Run(
+        status="running",
+        progress="Temizlik yapılıyor..."
+    )
+    db.add(db_run)
+    db.commit()
+    db.refresh(db_run)
+
     try:
         import main
         import shutil
@@ -60,12 +75,20 @@ def run_full_pipeline_task():
         # 3. Run process_pipeline for each model
         processed_models = []
         for i, (eng, mod) in enumerate(configs):
-            pipeline_status["progress"] = f"Model çalıştırılıyor ({i+1}/{len(configs)}): {eng}/{mod}..."
-            main.process_pipeline(eng, mod)
+            progress_msg = f"Model çalıştırılıyor ({i+1}/{len(configs)}): {eng}/{mod}..."
+            pipeline_status["progress"] = progress_msg
+
+            db_run.progress = progress_msg
+            db.add(db_run)
+            db.commit()
+            main.process_pipeline(eng, mod, run_id=db_run.id)
             processed_models.append((eng, mod))
             
         # 4. Generate the report
         pipeline_status["progress"] = "Karşılaştırma raporu oluşturuluyor..."
+        db_run.progress = "Karşılaştırma raporu oluşturuluyor..."
+        db.add(db_run)
+        db.commit()
         generate_report(
             outputs_dir=str(main.OUTPUTS_DIR),
             common_fields_dir=str(main.COMMON_FIELDS_DIR),
@@ -73,11 +96,26 @@ def run_full_pipeline_task():
         )
         
         pipeline_status["status"] = "success"
-        pipeline_status["progress"] = "Rapor başarıyla üretildi."
+        pipeline_status["progress"] = "Rapor başarıyla üretildi."   
+        
+        db_run.status = "success"
+        db_run.progress = "Rapor başarıyla üretildi."
+        db.add(db_run)
+        db.commit()
+
     except Exception as e:
         pipeline_status["status"] = "error"
         pipeline_status["progress"] = ""
         pipeline_status["error"] = str(e)
+
+        db_run.status = "error"
+        db_run.progress = ""
+        db_run.error = str(e)
+        db.add(db_run)
+        db.commit()
+
+    finally:
+        db.close()
 
 # =============================================================================
 # Uygulama
@@ -220,6 +258,17 @@ _ENGINE_SCHEMA = {
                  {"value": "medium", "desc": "Medium (doğru)"},
              ]},
         ],
+        "advanced_settings": [
+            {"key": "Global.text_score", "label": "Min. Kelime Güven Skoru (Global.text_score)", "type": "float", "default": 0.5},
+            {"key": "Global.max_side_len", "label": "Max Görsel Çözünürlüğü (Global.max_side_len)", "type": "int", "default": 2000},
+            {"key": "Det.thresh", "label": "Binarizasyon Eşiği (Det.thresh)", "type": "float", "default": 0.3},
+            {"key": "Det.box_thresh", "label": "Kutu Eşiği (Det.box_thresh)", "type": "float", "default": 0.5},
+        ],
+        "call_settings": [
+            {"key": "use_det", "label": "Kutu Tespiti Aktif (use_det)", "type": "bool", "default": True},
+            {"key": "use_cls", "label": "Yön Tespiti Aktif (use_cls)", "type": "bool", "default": True},
+            {"key": "use_rec", "label": "Metin Okuma Aktif (use_rec)", "type": "bool", "default": True},
+        ]
     },
     "paddleocr": {
         "ocr_settings": [
@@ -326,8 +375,8 @@ def create_config(engine: str, payload: dict):
 
         if block_key == "extra_params":
             doc.setdefault("ocr_settings", {})["extra_params"] = block
-        elif block_key == "model_selection":
-            doc.setdefault("ocr_settings", {})["model_selection"] = block
+        elif block_key in ("model_selection", "advanced_settings", "call_settings"):
+            doc.setdefault("ocr_settings", {})[block_key] = block
         else:
             doc[block_key] = block
 
@@ -443,6 +492,7 @@ async def process_image(
     file: UploadFile = File(..., description="Taranacak gorsel dosyasi (png/jpg)"),
     engine: str      = Form(..., description="OCR motoru: tesseract, doctr, easyocr, rapidocr"),
     model_name: str  = Form(..., description="Model versiyonu: model_v1, model_upgraded ..."),
+    db: Session = Depends(get_db)
 ):
     """
     Yuklenen gorseli secilen OCR motoru ile isler.
@@ -497,6 +547,24 @@ async def process_image(
     saved_json_path = saved_dir / saved_json_name
     with open(saved_json_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=4)
+
+    metrics = result.get("metrics", {})
+    common_fields = metrics.get("common_fields", {})
+    image_url = f"/web_outputs/{engine}/{model_name}/{saved_img_name}"
+    db_result = OCRResult(run_id=None, image_name=file.filename, 
+    doc_type=metrics.get("doc_type"), engine=engine, model_name=model_name, 
+    total_time_seconds=metrics.get("avg_total_time_seconds"), 
+    avg_confidence=metrics.get("avg_confidence"), 
+    cer=common_fields.get("avg_cer"),
+    wer=common_fields.get("avg_wer"), 
+    common_field_match_ratio=common_fields.get("avg_common_field_match_ratio"), 
+    raw_text=result.get("text",""), words=result.get("words",[]), 
+    common_field_results=result.get("common_field_results",{}), settings_used=result.get("settings_used",{}), 
+    preprocessing_used=result.get("preprocessing_used",{}), image_url=image_url
+    )
+    db.add(db_result)
+    db.commit()
+        
 
     return JSONResponse(content=result)
 
@@ -720,70 +788,46 @@ def get_report():
 # =============================================================================
 
 @app.get("/past-reports")
-def get_past_reports():
+def get_past_reports(db: Session = Depends(get_db)):
+    
+    results = db.query(OCRResult).order_by(OCRResult.created_at.desc()).all()
+
     reports = []
-    if not WEB_OUTPUTS_DIR.exists():
-        return []
-        
-    for json_path in sorted(WEB_OUTPUTS_DIR.glob("**/*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
-        try:
-            with open(json_path, encoding="utf-8") as f:
-                data = json.load(f)
-            
-            rel_path = json_path.relative_to(WEB_OUTPUTS_DIR)
-            if len(rel_path.parts) < 3:
-                continue
-                
-            engine = rel_path.parts[0]
-            model_name = rel_path.parts[1]
-            
-            # Ilgili gorsel dosyasini bulmaya calis
-            parent_dir = json_path.parent
-            img_file = None
-            stem = json_path.stem
-            img_extensions = [".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp"]
-            
-            # 1. Tam eslesen dosya adini ara
-            for ext in img_extensions:
-                candidate = parent_dir / f"{stem}{ext}"
-                if candidate.exists():
-                    img_file = candidate.name
-                    break
-                    
-            # 2. Eslesmediyse timestamp'e gore ara (uploaded_123456_...)
-            if not img_file:
-                parts = stem.split("_")
-                if len(parts) >= 2 and parts[0] == "uploaded":
-                    prefix = f"uploaded_{parts[1]}_"
-                    for f_item in parent_dir.iterdir():
-                        if f_item.is_file() and f_item.name.startswith(prefix) and f_item.suffix.lower() in img_extensions:
-                            img_file = f_item.name
-                            break
-                            
-            # 3. Hala yoksa dosya adina gore genel ara (legacy)
-            if not img_file:
-                for f_item in parent_dir.iterdir():
-                    if f_item.is_file() and stem in f_item.name and f_item.suffix.lower() in img_extensions:
-                        img_file = f_item.name
-                        break
-            
-            metrics = data.get("metrics", {})
-            filename = data.get("filename") or (img_file[20:] if img_file and img_file.startswith("uploaded_") else stem)
-            
-            reports.append({
-                "id": stem,
-                "engine": engine,
-                "model_name": model_name,
-                "filename": filename,
-                "timestamp": json_path.stat().st_mtime,
-                "image_url": f"/web_outputs/{engine}/{model_name}/{img_file}" if img_file else None,
-                "metrics": metrics,
-                "data": data
-            })
-        except Exception as e:
-            print(f"Past report parsing error ({json_path}): {e}")
-            continue
-            
+    for row in results:
+        metrics = {
+            "doc_type": row.doc_type,
+            "file_count": 1,
+            "avg_total_time_seconds": row.total_time_seconds,
+            "avg_confidence": row.avg_confidence,
+            "common_fields": {
+                "avg_cer": row.cer,
+                "avg_wer": row.wer,
+                "avg_common_field_match_ratio": row.common_field_match_ratio
+            }
+        }
+
+        data = {
+            "text": row.raw_text,
+            "words": row.words,
+            "common_field_results": row.common_field_results,
+            "settings_used": row.settings_used,
+            "preprocessing_used": row.preprocessing_used,
+            "image_url": row.image_url,
+            "metrics": metrics,
+            "filename": row.image_name,
+        }
+        reports.append({
+            "id":str(row.id),
+            "engine":row.engine,
+            "model_name":row.model_name,
+            "filename":row.image_name,
+            "doc_type":row.doc_type,
+            "timestamp": row.created_at.timestamp() if row.created_at else None,
+            "image_url":row.image_url,
+            "metrics":metrics,
+            "data":data,
+        })
+
     return reports
 
 
@@ -792,34 +836,39 @@ def get_past_reports():
 # =============================================================================
 
 @app.delete("/past-reports/{engine}/{model_name}/{report_id}")
-def delete_past_report(engine: str, model_name: str, report_id: str):
-    target_dir = WEB_OUTPUTS_DIR / engine / model_name
-    if not target_dir.exists():
-        raise HTTPException(status_code=404, detail="Gecmis rapor dizini bulunamadi.")
-        
-    json_file = target_dir / f"{report_id}.json"
-    if not json_file.exists():
-        raise HTTPException(status_code=404, detail="Rapor bulunamadi.")
-        
-    # JSON dosyasini sil
+def delete_past_report(engine: str, model_name: str, report_id: str, db: Session = Depends(get_db)):
+    # 1. Gelen ID'yi tam sayıya çevirmeyi deniyoruz
     try:
-        json_file.unlink()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Rapor JSON'i silinirken hata: {e}")
+        db_id = int(report_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Geçersiz rapor ID formatı.")
         
-    # Gorsel dosyasini sil
+    # 2. Veritabanından ilgili kaydı sorguluyoruz
+    db_result = db.query(OCRResult).filter(OCRResult.id == db_id).first()
+    if not db_result:
+        raise HTTPException(status_code=404, detail="Rapor veritabanında bulunamadı.")
+        
+    # 3. Görsel dosyasını diskten temizliyoruz
     deleted_img = False
-    img_extensions = [".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp"]
-    for ext in img_extensions:
-        img_file = target_dir / f"{report_id}{ext}"
-        if img_file.exists():
+    if db_result.image_url:
+        rel_path = db_result.image_url.replace("/web_outputs/", "")
+        img_path = WEB_OUTPUTS_DIR / rel_path
+        if img_path.exists():
             try:
-                img_file.unlink()
+                img_path.unlink()
                 deleted_img = True
             except Exception as e:
-                print(f"Gorsel silinirken hata ({img_file}): {e}")
+                print(f"Görsel diskten silinirken hata: {e}")
                 
-    return {"status": "success", "message": "Rapor basariyla silindi.", "deleted_image": deleted_img}
+    # 4. Veritabanından kaydı siliyoruz
+    try:
+        db.delete(db_result)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Rapor silinirken hata oluştu: {e}")
+        
+    return {"status": "success", "message": "Rapor başarıyla silindi.", "deleted_image": deleted_img}
 
 
 # =============================================================================

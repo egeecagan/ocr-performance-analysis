@@ -40,6 +40,7 @@ from runners.accuracy import (
 )
 from runners.lcs_cer import check_all_fields_lcs_cer_with_bbox, enrich_words_with_field_matches_lcs
 from generate_report import generate_report
+from database import SessionLocal, Run, OCRResult
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -236,6 +237,7 @@ def process_pipeline(
     model_name: str,
     image_files: list[str] | None = None,
     output_subdir: str | None = None,
+    run_id: int | None = None
 ) -> None:
     """
     engine, model_name ile OCR pipeline'ini calistirir.
@@ -253,6 +255,15 @@ def process_pipeline(
         print(f"Error: '{engine}' is not registered in registry.py.")
         print(f"Registered engines: {list(ENGINES.keys())}")
         return
+
+    db = SessionLocal()
+
+    if run_id is None:
+        db_run = Run(status="running", progress=f"Model başlatılıyor: {engine} / {model_name}...")
+        db.add(db_run)
+        db.commit()
+        db.refresh(db_run)
+        run_id = db_run.id
 
     engine_spec = ENGINES[engine]
     run_function = engine_spec["run_function"]
@@ -419,6 +430,43 @@ def process_pipeline(
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(output_data, f, ensure_ascii=False, indent=4)
 
+        c_results = output_data.get("common_field_results", {})
+        cer_values = [v["cer"] for v in c_results.values() if v["found"] and v.get("cer") is not None]
+        wer_values = [v["wer"] for v in c_results.values() if v["found"] and v.get("wer") is not None]
+        
+        avg_cer = sum(cer_values) / len(cer_values) if cer_values else None
+        avg_wer = sum(wer_values) / len(wer_values) if wer_values else None
+
+        if output_subdir: image_url = f"/web_outputs/{output_subdir}/{engine}/{model_name}/{img_name}"
+        else: image_url = f"/web_outputs/{engine}/{model_name}/{img_name}"
+        cf_source = output_data.get("common_fields_source")
+        if cf_source:
+            doc_type = Path(cf_source).stem.split("_")[0].lower()
+        else:
+            doc_type = "surucubelgesi"
+        
+        db_result = OCRResult(
+            run_id=run_id,
+            engine=engine,
+            model_name=model_name,
+            image_name=img_name,
+            doc_type=doc_type,
+            total_time_seconds=output_data.get("total_time_seconds"),
+            avg_confidence=output_data.get("avg_confidence"),
+            cer=avg_cer,
+            wer=avg_wer,
+            common_field_match_ratio=output_data.get("common_field_match_ratio"),
+            raw_text=output_data.get("text", ""),
+            words=output_data.get("words", []),
+            common_field_results=output_data.get("common_field_results", {}),
+            settings_used=output_data.get("settings_used", {}),
+            preprocessing_used=output_data.get("preprocessing_used", {}),
+            image_url=image_url, 
+        )
+        db.add(db_result)
+        db.commit()
+        
+
         print(
             f"[{engine.upper()} - {model_name}] Done: {img_name} | "
             f"Time: {output_data.get('execution_time_seconds')}s | "
@@ -428,6 +476,15 @@ def process_pipeline(
         )
 
     PROCESSED_MODELS.append((engine, model_name))
+
+
+    if 'db_run' in locals():
+        db_run.status = "success"
+        db_run.progress = "Completed"
+        db.add(db_run)
+        db.commit()
+
+    db.close()
 
 
 if __name__ == "__main__":

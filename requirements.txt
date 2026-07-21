@@ -43,3 +43,4 @@ onnxruntime
 # bu iki satırı yorum satırı yapıp PaddleOCR'ı Docker üzerinden çalıştırın.
 paddleocr==3.7.0
 paddlepaddle
+sqlalchemy>=2.0.0

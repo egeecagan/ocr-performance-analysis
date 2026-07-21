@@ -1,0 +1,20 @@
+model_name: tuner_best_1
+ocr_settings:
+  lang: tur+eng
+  psm: 12
+  oem: 3
+  extra_params:
+    preserve_interword_spaces: 0
+  dpi: 150
+preprocessing:
+  grayscale: true
+  deskew: true
+  autocrop_border: true
+  clahe: true
+  resize: true
+  resize_scale: 2.0
+  resize_interpolation: lanczos
+  threshold: true
+  threshold_method: adaptive
+  threshold_block_size: 35
+  threshold_c: 11
